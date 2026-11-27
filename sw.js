@@ -1,5 +1,5 @@
-/* Duty Call service worker: ติดตั้งเป็นแอป + แสดงการแจ้งเตือนระบบ */
-const CACHE = 'duty-call-v3';
+/* Call Of Duty Modern Warfare service worker: ติดตั้งเป็นแอป + แสดงการแจ้งเตือนระบบ */
+const CACHE = 'duty-call-v4';
 const SHELL = ['./', './index.html', './assets/app.css', './assets/app.js', './config.js',
   './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png'];
 

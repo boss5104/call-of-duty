@@ -1,4 +1,4 @@
-/* Duty Call — ระบบเรียกปฏิบัติหน้าที่ (client) */
+/* Call Of Duty Modern Warfare — ระบบเรียกปฏิบัติหน้าที่ (client) */
 (() => {
   'use strict';
 
@@ -130,61 +130,137 @@
    * Sound / vibration / notifications / wake lock
    * ===================================================================== */
   const Sound = {
-    ctx: null, timer: null, vibTimer: null,
+    ctx: null, out: null, boost: null, timer: null, vibTimer: null, src: null, noise: null,
+    fileBuf: null, fileState: 'idle', // idle | loading | ok | none
+
     unlock() {
-      try {
-        if (navigator.audioSession) navigator.audioSession.type = 'playback'; // iOS: เล่นแม้เปิดโหมดเงียบ
-      } catch (_) {}
+      try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (_) {} // iOS: ดังแม้เปิดโหมดเงียบ
       try {
         if (!this.ctx) {
           const AC = window.AudioContext || window.webkitAudioContext;
           if (!AC) return false;
           this.ctx = new AC();
+          this.buildChain();
         }
         if (this.ctx.state === 'suspended') this.ctx.resume();
         const b = this.ctx.createBuffer(1, 1, 22050), s = this.ctx.createBufferSource();
         s.buffer = b; s.connect(this.ctx.destination); s.start(0);
+        this.loadFile();
         return true;
       } catch (_) { return false; }
     },
+
+    /* ขยายเสียง → ลิมิตเตอร์ → ส่งออกเต็ม 0 dBFS (ดังที่สุดเท่าที่เบราว์เซอร์ส่งออกได้) */
+    buildChain() {
+      const c = this.ctx;
+      this.boost = c.createGain();
+      this.boost.gain.value = Math.min(6, Math.max(1, Number(CFG.ALARM_BOOST) || 4));
+      const lim = c.createDynamicsCompressor();
+      lim.threshold.value = -12; lim.knee.value = 0; lim.ratio.value = 20;
+      lim.attack.value = 0.001; lim.release.value = 0.08;
+      const makeup = c.createGain();
+      makeup.gain.value = 2.2;
+      const clip = c.createWaveShaper(); // soft clip กันเสียงแตกหนักเกินไปแต่ยังดังเต็มที่
+      const n = 2048, curve = new Float32Array(n);
+      for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; curve[i] = Math.tanh(2.2 * x) / Math.tanh(2.2); }
+      clip.curve = curve;
+      this.boost.connect(lim); lim.connect(makeup); makeup.connect(clip); clip.connect(c.destination);
+      this.out = this.boost;
+    },
+
+    loadFile() {
+      if (this.fileState !== 'idle' || !CFG.ALARM_URL || !this.ctx) return;
+      this.fileState = 'loading';
+      fetch(CFG.ALARM_URL, { cache: 'no-cache' })
+        .then(r => { if (!r.ok) throw 0; return r.arrayBuffer(); })
+        .then(ab => new Promise((res, rej) => { const p = this.ctx.decodeAudioData(ab, res, rej); if (p && p.then) p.then(res, rej); }))
+        .then(buf => {
+          this.fileBuf = buf; this.fileState = 'ok';
+          if (this.timer) { this.stopLoops(); this.startAlarm(); } // สลับจากเสียงสังเคราะห์เป็นไฟล์ทันที
+        })
+        .catch(() => { this.fileState = 'none'; });
+    },
+
     get ready() { return !!this.ctx && this.ctx.state === 'running'; },
-    tone(freq, at, dur, type = 'sine', vol = .2) {
+
+    tone(freq, at, dur, type = 'sine', vol = .2, dest) {
       const c = this.ctx; if (!c) return;
       const o = c.createOscillator(), g = c.createGain();
       o.type = type; o.frequency.setValueAtTime(freq, at);
       g.gain.setValueAtTime(0.0001, at);
-      g.gain.exponentialRampToValueAtTime(vol, at + .02);
+      g.gain.exponentialRampToValueAtTime(vol, at + .01);
       g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
-      o.connect(g); g.connect(c.destination);
+      o.connect(g); g.connect(dest || this.out || c.destination);
       o.start(at); o.stop(at + dur + .05);
     },
+    kick(at) {
+      const c = this.ctx, o = c.createOscillator(), g = c.createGain();
+      o.type = 'sine'; o.frequency.setValueAtTime(160, at); o.frequency.exponentialRampToValueAtTime(42, at + .18);
+      g.gain.setValueAtTime(1, at); g.gain.exponentialRampToValueAtTime(0.001, at + .32);
+      o.connect(g); g.connect(this.out); o.start(at); o.stop(at + .35);
+    },
+    snare(at, vol = .8) {
+      const c = this.ctx;
+      if (!this.noise) {
+        this.noise = c.createBuffer(1, c.sampleRate * .3, c.sampleRate);
+        const d = this.noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      }
+      const s = c.createBufferSource(), hp = c.createBiquadFilter(), g = c.createGain();
+      s.buffer = this.noise; hp.type = 'highpass'; hp.frequency.value = 1400;
+      g.gain.setValueAtTime(vol, at); g.gain.exponentialRampToValueAtTime(0.001, at + .16);
+      s.connect(hp); hp.connect(g); g.connect(this.out); s.start(at); s.stop(at + .2);
+      this.tone(190, at, .08, 'triangle', .5);
+    },
+    stab(notes, at, dur = .22, vol = .32) { notes.forEach(f => { this.tone(f, at, dur, 'sawtooth', vol); this.tone(f * 1.006, at, dur, 'square', vol * .5); }); },
+
+    /* มาร์ชทหารสังเคราะห์ (แต่งขึ้นเอง) + ไซเรน — ใช้เมื่อไม่มีไฟล์ assets/alarm.mp3 */
+    marchBar() {
+      const t = this.ctx.currentTime + .03, q = 60 / 132; // 132 BPM, 4/4
+      const Dm = [146.8, 174.6, 220], Bb = [116.5, 146.8, 174.6], C = [130.8, 164.8, 196], A = [110, 138.6, 164.8];
+      for (let i = 0; i < 4; i++) this.kick(t + i * q);
+      this.kick(t + 3.5 * q);
+      this.snare(t + q); this.snare(t + 3 * q);
+      [3.25, 3.5, 3.75].forEach(b => this.snare(t + b * q, .5));
+      this.stab(Dm, t); this.stab(Dm, t + .75 * q, .14); this.stab(Bb, t + 1.5 * q);
+      this.stab(C, t + 2 * q); this.stab(A, t + 2.75 * q, .14); this.stab(Dm, t + 3 * q, .4);
+      for (let i = 0; i < 8; i++) this.tone(i % 2 ? 880 : 1174.7, t + i * q / 2, q / 2 - .03, 'square', .22); // ไซเรน
+      return q * 4 * 1000;
+    },
+
     startAlarm() {
       this.unlock();
-      if (!this.timer) {
-        const loop = () => {
-          if (!this.ctx) return;
-          if (this.ctx.state === 'suspended') this.ctx.resume();
-          const t = this.ctx.currentTime + .03;
-          for (let i = 0; i < 6; i++) this.tone(i % 2 ? 784 : 1046, t + i * .22, .2, 'square', .16);
-        };
-        loop();
-        this.timer = setInterval(loop, 1700);
+      if (!this.ctx) return;
+      if (!this.timer && !this.src) {
+        if (this.ctx.state === 'suspended') this.ctx.resume();
+        if (this.fileBuf) {
+          const s = this.ctx.createBufferSource();
+          s.buffer = this.fileBuf; s.loop = true; s.connect(this.out); s.start();
+          this.src = s;
+          this.timer = setInterval(() => { if (this.ctx.state === 'suspended') this.ctx.resume(); }, 1000);
+        } else {
+          const ms = this.marchBar();
+          this.timer = setInterval(() => { if (this.ctx.state === 'suspended') this.ctx.resume(); this.marchBar(); }, ms);
+        }
       }
       if (!this.vibTimer && 'vibrate' in navigator) {
-        const v = () => { try { navigator.vibrate([700, 250, 700, 250, 700]); } catch (_) {} };
-        v(); this.vibTimer = setInterval(v, 2700);
+        const v = () => { try { navigator.vibrate([900, 200, 900, 200, 900]); } catch (_) {} };
+        v(); this.vibTimer = setInterval(v, 3000);
       }
     },
-    stopAlarm() {
+    stopLoops() {
       clearInterval(this.timer); this.timer = null;
+      if (this.src) { try { this.src.stop(); } catch (_) {} this.src.disconnect(); this.src = null; }
+    },
+    stopAlarm() {
+      this.stopLoops();
       clearInterval(this.vibTimer); this.vibTimer = null;
       try { navigator.vibrate && navigator.vibrate(0); } catch (_) {}
     },
     chime() {
       if (!this.ctx || this.ctx.state !== 'running') return;
       const t = this.ctx.currentTime + .02;
-      this.tone(880, t, .35, 'sine', .22);
-      this.tone(1318.5, t + .14, .5, 'sine', .2);
+      this.tone(880, t, .35, 'sine', .3);
+      this.tone(1318.5, t + .14, .5, 'sine', .28);
     }
   };
   document.addEventListener('pointerdown', () => Sound.unlock(), { passive: true });
@@ -306,7 +382,7 @@
       window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); this.deferred = e; this.refresh(); });
       window.addEventListener('appinstalled', () => {
         this.deferred = null; this.installed = true; this.refresh();
-        toast('ok', 'ติดตั้งเรียบร้อย', 'เปิดแอป Duty Call ได้จากหน้าจอโฮม');
+        toast('ok', 'ติดตั้งเรียบร้อย', 'เปิดแอป Call Of Duty ได้จากหน้าจอโฮม');
       });
       document.addEventListener('click', e => { if (e.target.closest('[data-install], #installBtn')) this.run(); });
       $('[data-close-sheet]').addEventListener('click', () => { $('#installSheet').hidden = true; });
@@ -339,9 +415,9 @@
       if (this.inApp) {
         steps = ['แตะเมนู <b>⋯</b> มุมขวาบนของแอปที่เปิดอยู่', 'เลือก <b>เปิดในเบราว์เซอร์</b> (Safari / Chrome)', 'จากนั้นแตะปุ่ม <b>เพิ่มไปยังหน้าจอโฮม</b> อีกครั้ง'];
       } else if (this.isIOS) {
-        steps = [`แตะปุ่ม <b>แชร์</b> ${share} ที่แถบด้านล่าง (หรือแถบที่อยู่ด้านบน)`, 'เลื่อนลงแล้วเลือก <b>เพิ่มไปยังหน้าจอโฮม</b> (Add to Home Screen)', 'แตะ <b>เพิ่ม</b> มุมขวาบน — ไอคอน Duty Call จะอยู่บนหน้าจอทันที'];
+        steps = [`แตะปุ่ม <b>แชร์</b> ${share} ที่แถบด้านล่าง (หรือแถบที่อยู่ด้านบน)`, 'เลื่อนลงแล้วเลือก <b>เพิ่มไปยังหน้าจอโฮม</b> (Add to Home Screen)', 'แตะ <b>เพิ่ม</b> มุมขวาบน — ไอคอน Call Of Duty จะอยู่บนหน้าจอทันที'];
       } else if (this.isAndroid) {
-        steps = ['แตะเมนู <b>⋮</b> มุมขวาบนของ Chrome', 'เลือก <b>ติดตั้งแอป</b> หรือ <b>เพิ่มลงในหน้าจอหลัก</b>', 'แตะ <b>ติดตั้ง</b> — ไอคอน Duty Call จะอยู่บนหน้าจอทันที'];
+        steps = ['แตะเมนู <b>⋮</b> มุมขวาบนของ Chrome', 'เลือก <b>ติดตั้งแอป</b> หรือ <b>เพิ่มลงในหน้าจอหลัก</b>', 'แตะ <b>ติดตั้ง</b> — ไอคอน Call Of Duty จะอยู่บนหน้าจอทันที'];
       } else {
         steps = ['คลิกไอคอน <b>ติดตั้ง</b> ⊕ ที่ด้านขวาของแถบที่อยู่ (Chrome / Edge)', 'กด <b>ติดตั้ง</b> เพื่อเพิ่มแอปลงในเครื่อง'];
       }
@@ -729,7 +805,7 @@
         Sound.unlock();
         Sound.startAlarm();
         $('#testAlarmBtn').disabled = true;
-        await sleep(2500);
+        await sleep(4000);
         if (!this.queue.length) Sound.stopAlarm();
         $('#testAlarmBtn').disabled = false;
         this.renderChecks();
@@ -740,7 +816,7 @@
   /* =====================================================================
    * Boot
    * ===================================================================== */
-  $('#orgName').textContent = CFG.ORG_NAME || 'ระบบเรียกปฏิบัติหน้าที่';
+  $('#orgName').textContent = CFG.ORG_NAME || 'Modern Warfare';
   const badge = $('#modeBadge');
   badge.hidden = false;
   badge.className = 'mode-badge ' + (LIVE ? 'live' : 'demo');
