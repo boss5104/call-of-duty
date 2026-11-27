@@ -265,6 +265,9 @@ em.muted { font-style: normal; font-size: 12px; }
 .person-main .push-tag { margin: 4px 0 0; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line-soft); }
 .push-tag.on { color: var(--ok); }
 .push-tag.off { color: #ffb36b; }
+.push-tag.bad { color: #ff9a9d; }
+.fix-btn { margin-left: 6px; padding: 2px 9px; border-radius: 99px; font-size: 11px; border: 1px solid rgba(255,90,95,.5); color: #ffb3b5; background: rgba(255,90,95,.08); white-space: nowrap; }
+.fix-btn:hover { background: rgba(255,90,95,.18); }
 
 .history { display: flex; flex-direction: column; gap: 8px; max-height: 460px; overflow: auto; }
 .hist { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--line-soft); }

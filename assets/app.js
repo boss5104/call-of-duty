@@ -2,8 +2,8 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.11.27-1531'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
-  const APP_CHANGES = 'เสียงเตือนดังขึ้น · สั่นแรงต่อเนื่อง · แจ้งเตือนดัง+สั่นใหม่ทุกครั้งที่ส่งซ้ำ (รวม iPhone)';
+  const APP_VERSION = '2026.11.27-1537'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
+  const APP_CHANGES = 'สถานะการแจ้งเตือนรายเครื่อง (✅ ได้รับ / ⚠️ ไม่ได้รับ) · ปุ่มแก้ไข/ซ่อมการแจ้งเตือน';
   const CFG = Object.assign({ API_URL: '', TEAMS: [], STAFF_POLL_MS: 4000, COMMANDER_POLL_MS: 3000 }, window.DUTY_CONFIG || {});
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -121,6 +121,7 @@
           d.calls = d.calls.filter(c => keep.has(c.callId)); d.resp = d.resp.filter(r => keep.has(r.callId)); save();
           return { ok: true, removed: n };
         }
+        case 'repairPush': cmd(); return { ok: true };
         case 'removeStaff': {
           cmd();
           d.staff = d.staff.filter(x => x.staffId !== p.staffId); save();
@@ -555,6 +556,29 @@
       try { return await this.subscribe(); }
       catch (e) { throw new Error('เปิดรับแจ้งเตือนไม่สำเร็จ: ' + e.message + ' — ลองใหม่อีกครั้ง'); }
     },
+    /** ซ่อม: ยกเลิกช่องทางเดิม → สมัครใหม่ → ลบของเก่าบนเซิร์ฟเวอร์ → ส่งแจ้งเตือนทดสอบ */
+    async repair(auto) {
+      const p = Staff.profile();
+      if (!p || !p.staffId || this.repairing) return;
+      this.repairing = true;
+      try {
+        if (!auto) await Notify.request();
+        if (!this.supported) { this.state = IOS ? 'needinstall' : 'nosupport'; Staff.enforce(); throw new Error(this.label()[1]); }
+        if (!Notify.granted) { this.state = 'off'; Staff.enforce(); throw new Error('ต้องอนุญาตการแจ้งเตือนก่อน'); }
+        const reg = await navigator.serviceWorker.ready;
+        const old = await reg.pushManager.getSubscription();
+        if (old) { try { await old.unsubscribe(); } catch (_) {} }
+        store.del('dc_push_key');
+        const sub = await this.subscribe();
+        await API.call('pushSub', { staffId: p.staffId, sub: sub.toJSON(), device: deviceName(), replace: true });
+        this.state = 'on'; this.last = Date.now();
+        toast('ok', 'ซ่อมการแจ้งเตือนเรียบร้อย', 'กำลังส่งแจ้งเตือนทดสอบมาที่เครื่องนี้…');
+        const r = await API.call('pushTest', { staffId: p.staffId, delay: 2 });
+        if (!r.sent) toast('err', 'ส่งแจ้งเตือนทดสอบไม่สำเร็จ', (r.errors && r.errors.join(' | ')) || '', 15000);
+      } catch (e) {
+        if (!auto || Push.state !== 'on') toast('err', 'ซ่อมการแจ้งเตือนไม่สำเร็จ', e.message, 12000);
+      } finally { this.repairing = false; Staff.renderChecks(); }
+    },
     async test() {
       const p = Staff.profile();
       if (this.state !== 'on') { await Notify.request(); await this.ensure(true); }
@@ -586,11 +610,33 @@
   }
 
   // สถานะ push ของแต่ละคน (ฝั่งผู้บังคับบัญชา): รับแจ้งเตือนตอนปิดแอปได้หรือยัง
-  function pushTag(s, long) {
-    if (typeof s.push !== 'number') return '';
-    return s.push
-      ? `<span class="push-tag on" title="ปิดแอป/ล็อกจอก็ยังได้รับแจ้งเตือน">🔔${long ? ' รับแจ้งเตือนตอนปิดแอปได้' : ''}</span>`
-      : `<span class="push-tag off" title="ต้องเปิดแอปเวอร์ชันใหม่ 1 ครั้งและอนุญาตการแจ้งเตือน">🔕${long ? ' ยังไม่เปิดรับแจ้งเตือนตอนปิดแอป' : ''}</span>`;
+  /** สถานะการแจ้งเตือนของแต่ละคน (เลือกเครื่องที่ดีที่สุดของคนนั้น) */
+  function pushState(s, now) {
+    if (typeof s.push !== 'number') return null;
+    if (!s.push) return { icon: '🔕', text: 'ยังไม่เปิดรับแจ้งเตือนตอนปิดแอป', bad: true, tip: 'ให้เจ้าของเครื่องเปิดแอปแล้วกดอนุญาตการแจ้งเตือน' };
+    if (s.repair) return { icon: '🔧', text: 'สั่งซ่อมแล้ว — รอเครื่องเปิดแอป', bad: true, wait: true, tip: 'เมื่อแอปบนเครื่องนั้นทำงาน ระบบจะสมัครรับแจ้งเตือนใหม่และส่งแจ้งเตือนทดสอบให้อัตโนมัติ' };
+    const rank = { ok: 5, wait: 4, idle: 3, lost: 2, perm: 1, err: 1, fail: 0 };
+    let best = null;
+    (s.devices || []).forEach(d => {
+      const sent = d.sent, recv = d.recv, got = recv && sent && recv.at >= sent.at - 2000;
+      let st;
+      if (sent && sent.code && (sent.code < 200 || sent.code >= 300)) st = { k: 'fail', icon: '❌', text: 'ส่งไม่ถึงเครื่อง (' + sent.code + ')', bad: true, tip: 'ช่องทางแจ้งเตือนของเครื่องนี้ใช้ไม่ได้แล้ว กด “แก้ไข” แล้วให้เจ้าของเครื่องเปิดแอป' };
+      else if (recv && recv.perm && recv.perm !== 'granted') st = { k: 'perm', icon: '⚠️', text: 'การแจ้งเตือนถูกปิดในเครื่อง', bad: true, tip: 'เจ้าของเครื่องต้องเปิดการแจ้งเตือนในตั้งค่าเครื่อง (ข้อมูลแอป → การแจ้งเตือน → อนุญาต)' };
+      else if (got && recv.kind === 'error') st = { k: 'err', icon: '⚠️', text: 'ได้รับแต่แสดงแจ้งเตือนไม่ได้', bad: true, tip: recv.err || '' };
+      else if (got) st = { k: 'ok', icon: '✅', text: 'เครื่องได้รับแจ้งเตือนแล้ว ' + fmtTime(recv.at) };
+      else if (sent && now - sent.at > 45000) st = { k: 'lost', icon: '⚠️', text: 'ส่งแล้วแต่เครื่องไม่ได้รับ', bad: true, tip: 'สาเหตุที่พบบ่อย: ปิดเครื่อง/ไม่มีเน็ต · ปิด Chrome หรือแอปถูกปิดเพื่อประหยัดแบต · ปิดการแจ้งเตือนของ Chrome/แอปในตั้งค่าเครื่อง (Mac: System Settings → Notifications → Chrome) · โหมดโฟกัส/ห้ามรบกวน' };
+      else if (sent) st = { k: 'wait', icon: '⏳', text: 'กำลังส่งแจ้งเตือน…' };
+      else st = { k: 'idle', icon: '🔔', text: 'รับแจ้งเตือนตอนปิดแอปได้' };
+      st.tip = (st.tip ? st.tip + ' · ' : '') + (d.device || '') + (d.host ? ' (' + d.host + ')' : '');
+      if (!best || rank[st.k] > rank[best.k]) best = st;
+    });
+    return best || { icon: '🔔', text: 'รับแจ้งเตือนตอนปิดแอปได้' };
+  }
+  function pushTag(s, long, now) {
+    const st = pushState(s, now || Date.now());
+    if (!st) return '';
+    const fix = st.bad && !st.wait ? `<button class="fix-btn" type="button" data-repair-staff="${esc(s.staffId)}" data-name="${esc(s.nickname)}">🔧 แก้ไข</button>` : '';
+    return `<span class="push-tag ${st.bad ? 'bad' : 'on'}" title="${esc(st.tip || st.text)}">${st.icon}${long ? ' ' + esc(st.text) : ''}</span>${fix}`;
   }
 
   const Wake = {
@@ -854,7 +900,7 @@
         const acks = c.responses.slice().sort((a, b) => a.at - b.at).map(r => `
           <div class="ack-item"><span class="ai-ico">✓</span><span class="ai-name">${esc(r.nickname)}<small>${esc(r.fullName)} · ${esc(r.team)}</small></span><span class="ai-time">${fmtTime(r.at)}</span></div>`).join('');
         const pend = pending.map(s => `
-          <div class="ack-item pending"><span class="ai-ico">…</span><span class="ai-name">${esc(s.nickname)}<small>${esc(s.firstName)} ${esc(s.lastName)} · ${esc(s.team)}</small></span><span class="ai-time">${s.online ? '<span class="presence on">ออนไลน์</span>' : '<span class="presence">ออฟไลน์</span>'}${pushTag(s)}</span></div>`).join('');
+          <div class="ack-item pending"><span class="ai-ico">…</span><span class="ai-name">${esc(s.nickname)}<small>${esc(s.firstName)} ${esc(s.lastName)} · ${esc(s.team)}</small></span><span class="ai-time">${s.online ? '<span class="presence on">ออนไลน์</span>' : '<span class="presence">ออฟไลน์</span>'}${pushTag(s, false, d.serverTime)}</span></div>`).join('');
         return `
           <div class="call-card ${parsePrio(c.priority).level === 'critical' ? 'critical' : ''}">
             <div class="call-top">
@@ -892,7 +938,7 @@
           <div class="person-main">
             <div class="person-name">${esc(s.nickname)} · ${esc(s.firstName)} ${esc(s.lastName)}</div>
             <div class="person-meta">${esc(s.team)} · LINE: ${esc(s.lineId)}</div>
-            ${pushTag(s, true)}
+            <div>${pushTag(s, true, d.serverTime)}</div>
           </div>
           <div class="person-actions">
             <span class="presence ${s.online ? 'on' : ''}" title="${esc(ago(s.lastSeen))}">${s.online ? 'ออนไลน์' : esc(ago(s.lastSeen))}</span>
@@ -941,6 +987,13 @@
       try {
         const r = await API.call('removeAllStaff', Object.assign(this.creds(), { confirm: 'DELETE' }));
         toast('info', 'ลบรายชื่อแล้ว ' + (r.removed || 0) + ' คน', 'ทุกคนต้องลงทะเบียนใหม่เมื่อเปิดแอป'); this.poll();
+      } catch (e) { toast('err', 'ไม่สำเร็จ', e.message); }
+    },
+    async repair(staffId, name) {
+      try {
+        await API.call('repairPush', Object.assign(this.creds(), { staffId }));
+        toast('info', 'สั่งซ่อมการแจ้งเตือนของ ' + name + ' แล้ว', 'ถ้าแอปบนเครื่องนั้นเปิดอยู่จะซ่อมภายในไม่กี่วินาที ถ้าปิดอยู่ ให้เจ้าของเครื่องเปิดแอป 1 ครั้ง — ระบบจะสมัครใหม่และส่งแจ้งเตือนทดสอบให้อัตโนมัติ', 12000);
+        this.poll();
       } catch (e) { toast('err', 'ไม่สำเร็จ', e.message); }
     },
     async removeStaff(staffId, name) {
@@ -993,7 +1046,10 @@
         const b = e.target.closest('[data-close-call]'); if (b) this.close(b.dataset.closeCall);
       });
       $('#rosterSearch').addEventListener('input', e => { this.search = e.target.value; this.render(); });
+      const onRepair = e => { const r = e.target.closest('[data-repair-staff]'); if (r) this.repair(r.dataset.repairStaff, r.dataset.name); };
+      $('#activeCalls').addEventListener('click', onRepair);
       $('#roster').addEventListener('click', e => {
+        onRepair(e);
         const b = e.target.closest('[data-remove-staff]'); if (b) this.removeStaff(b.dataset.removeStaff, b.dataset.name);
       });
       $('#removeAllBtn').addEventListener('click', () => this.removeAll());
@@ -1131,6 +1187,7 @@
           toast('err', 'ไม่พบข้อมูลการลงทะเบียน', 'กรุณาลงทะเบียนใหม่อีกครั้ง');
           return this.showReg(false);
         }
+        if (r.repair && !Push.repairing) Push.repair(true); // ผู้บังคับบัญชาสั่งซ่อม
         const incoming = r.calls.filter(c => !this.acked.has(c.callId));
         const ids = new Set(incoming.map(c => c.callId));
         const before = new Set(this.queue.map(c => c.callId));
@@ -1263,6 +1320,7 @@
       $('#enableNotifBtn').addEventListener('click', async () => { await Notify.request(); await Push.ensure(true); this.renderChecks(); });
       $('#ckPush').addEventListener('click', async () => { if (Push.state !== 'on') { await Notify.request(); await Push.ensure(true); } });
       $('#testPushBtn').addEventListener('click', () => Push.test());
+      $('#repairPushBtn').addEventListener('click', () => Push.repair(false));
       $('#testAlarmBtn').addEventListener('click', () => this.previewTone(Sound.selected));
     }
   };
