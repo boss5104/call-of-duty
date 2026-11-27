@@ -2,8 +2,8 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.11.27-1537'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
-  const APP_CHANGES = 'สถานะการแจ้งเตือนรายเครื่อง (✅ ได้รับ / ⚠️ ไม่ได้รับ) · ปุ่มแก้ไข/ซ่อมการแจ้งเตือน';
+  const APP_VERSION = '2026.11.27-1542'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
+  const APP_CHANGES = 'เพิ่มขั้นตอนตั้งค่า iPhone ให้แจ้งเตือนมีเสียงและแสดงข้อความ';
   const CFG = Object.assign({ API_URL: '', TEAMS: [], STAFF_POLL_MS: 4000, COMMANDER_POLL_MS: 3000 }, window.DUTY_CONFIG || {});
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));

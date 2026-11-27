@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&family=Noto+Serif+Thai:wght@500;600;700&family=Cinzel:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="assets/app.css?v=2026.11.27-1537">
+  <link rel="stylesheet" href="assets/app.css?v=2026.11.27-1542">
 </head>
 <body>
   <div class="bg-orb orb-1"></div><div class="bg-orb orb-2"></div><div class="bg-grid"></div>
@@ -257,7 +257,15 @@
             <li>ปรับ <b>เสียงแจ้งเตือน</b> ของเครื่องให้สุด</li>
           </ol>
           <p>ถ้าเปิดผ่าน Chrome (ไม่ได้ติดตั้ง): Chrome → ⋮ → การตั้งค่า → การแจ้งเตือน → เลือกเว็บนี้ → ตั้งเสียง/ป๊อปอัปแบบเดียวกัน</p>
-          <p><b>iPhone</b>: ต้องเพิ่มลงหน้าจอโฮมก่อน (iOS 16.4+) แล้วเปิดแอปจากไอคอน · ตั้งค่า → การแจ้งเตือน → Call Of Duty → เปิด <b>เสียง</b>, <b>แบนเนอร์แบบคงอยู่ (Persistent)</b> · ปิดสวิตช์ปิดเสียงข้างเครื่อง</p>
+          <p><b>iPhone</b> (ต้องเพิ่มลงหน้าจอโฮมก่อน iOS 16.4+ แล้วเปิดแอปจากไอคอน)</p>
+          <ol>
+            <li><b>ปิดโหมดเงียบ</b> (สวิตช์/ปุ่ม Action ข้างเครื่อง — ถ้ามีรูปกระดิ่งขีดฆ่า 🔕 บนแถบด้านบน แจ้งเตือนจะไม่มีเสียง)</li>
+            <li>ตั้งค่า → การแจ้งเตือน → Call Of Duty → เปิด <b>อนุญาตการแจ้งเตือน</b>, <b>เสียง</b>, หน้าจอล็อก/ศูนย์การแจ้งเตือน/แบนเนอร์ · รูปแบบแบนเนอร์: <b>คงอยู่ (Persistent)</b></li>
+            <li>ตั้งค่า → การแจ้งเตือน → <b>แสดงตัวอย่าง: ทุกครั้ง (Always)</b> — ถ้าไม่ตั้ง หน้าจอล็อกจะขึ้นแค่คำว่า “Notification”</li>
+            <li>ตั้งค่า → เสียงและการสั่น → ลาก <b>เสียงเรียกเข้าและเสียงเตือน</b> ให้สุด · เปิด <b>การสั่น: เล่นเสมอ</b></li>
+            <li>ถ้าใช้โหมดโฟกัส/ห้ามรบกวน: เพิ่ม Call Of Duty ในแอปที่อนุญาต</li>
+          </ol>
+          <p>iPhone ไม่อนุญาตให้แอปใด ๆ (ยกเว้นสายโทรเข้า/นาฬิกาปลุก) ขึ้นเต็มจอเมื่อล็อกอยู่ — แตะแจ้งเตือนเพื่อเปิดจอเตือนเต็มจอพร้อมไซเรน</p>
         </details>
       </div>
     </section>
@@ -330,7 +338,7 @@
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
 
-  <script src="config.js?v=2026.11.27-1537"></script>
-  <script src="assets/app.js?v=2026.11.27-1537"></script>
+  <script src="config.js?v=2026.11.27-1542"></script>
+  <script src="assets/app.js?v=2026.11.27-1542"></script>
 </body>
 </html>
