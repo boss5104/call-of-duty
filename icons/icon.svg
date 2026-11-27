@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="70%">
+      <stop offset="0" stop-color="#3A0A0E"/>
+      <stop offset=".55" stop-color="#12060A"/>
+      <stop offset="1" stop-color="#030204"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFF1C2"/>
+      <stop offset=".35" stop-color="#E2BE5E"/>
+      <stop offset=".7" stop-color="#B8892C"/>
+      <stop offset="1" stop-color="#6E4E12"/>
+    </linearGradient>
+    <linearGradient id="steel" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5E6470"/>
+      <stop offset=".5" stop-color="#E8ECF2"/>
+      <stop offset="1" stop-color="#7A808C"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1B1F2B"/>
+      <stop offset="1" stop-color="#07080C"/>
+    </linearGradient>
+    <linearGradient id="red" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FF4A4A"/>
+      <stop offset="1" stop-color="#9E0D12"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="10" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" fill="url(#bg)"/>
+
+  <!-- crossed blades -->
+  <g>
+    <g transform="rotate(-42 256 256)">
+      <path d="M246 22 L256 -6 L266 22 L266 330 L246 330 Z" fill="url(#steel)"/>
+      <path d="M256 0 L256 328" stroke="#2A2E38" stroke-width="2"/>
+      <rect x="206" y="330" width="100" height="18" rx="3" fill="url(#gold)"/>
+      <path d="M206 330 L188 318 L206 348 Z M306 330 L324 318 L306 348 Z" fill="url(#gold)"/>
+      <rect x="248" y="348" width="16" height="70" fill="#2A1A0A"/>
+      <path d="M248 358 H264 M248 371 H264 M248 384 H264 M248 397 H264 M248 410 H264" stroke="#6E4E12" stroke-width="3"/>
+      <path d="M256 416 L270 430 L256 446 L242 430 Z" fill="url(#gold)"/>
+    </g>
+    <g transform="rotate(42 256 256)">
+      <path d="M246 22 L256 -6 L266 22 L266 330 L246 330 Z" fill="url(#steel)"/>
+      <path d="M256 0 L256 328" stroke="#2A2E38" stroke-width="2"/>
+      <rect x="206" y="330" width="100" height="18" rx="3" fill="url(#gold)"/>
+      <path d="M206 330 L188 318 L206 348 Z M306 330 L324 318 L306 348 Z" fill="url(#gold)"/>
+      <rect x="248" y="348" width="16" height="70" fill="#2A1A0A"/>
+      <path d="M248 358 H264 M248 371 H264 M248 384 H264 M248 397 H264 M248 410 H264" stroke="#6E4E12" stroke-width="3"/>
+      <path d="M256 416 L270 430 L256 446 L242 430 Z" fill="url(#gold)"/>
+    </g>
+  </g>
+
+  <g transform="translate(256 262) scale(.84) translate(-256 -262)">
+  <!-- spiked battle shield -->
+  <path d="M256 92 L286 122 L356 106 L372 134 L360 168 V262 C360 334 316 392 256 428 C196 392 152 334 152 262 V168 L140 134 L156 106 L226 122 Z"
+        fill="url(#shield)" stroke="url(#gold)" stroke-width="12" stroke-linejoin="miter"/>
+  <path d="M256 126 L280 150 L334 138 L338 172 V262 C338 320 304 368 256 398 C208 368 174 320 174 262 V172 L178 138 L232 150 Z"
+        fill="none" stroke="#B8892C" stroke-opacity=".45" stroke-width="3"/>
+
+  <!-- red war slash -->
+  <path d="M174 214 L338 186 L338 206 L174 236 Z" fill="url(#red)" opacity=".9" filter="url(#glow)"/>
+
+  <!-- aggressive star -->
+  <path d="M256 150 L274 214 L340 214 L286 252 L306 318 L256 278 L206 318 L226 252 L172 214 L238 214 Z"
+        fill="url(#gold)" stroke="#3A2608" stroke-width="4" stroke-linejoin="miter"/>
+
+  <!-- rank chevrons -->
+  <path d="M210 330 L256 356 L302 330 L302 346 L256 372 L210 346 Z" fill="url(#red)"/>
+  <path d="M222 360 L256 380 L290 360 L290 372 L256 392 L222 372 Z" fill="url(#gold)"/>
+  </g>
+</svg>
