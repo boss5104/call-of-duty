@@ -2,6 +2,7 @@
 (() => {
   'use strict';
 
+  const APP_VERSION = '2026.11.27-1427'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
   const CFG = Object.assign({ API_URL: '', TEAMS: [], STAFF_POLL_MS: 4000, COMMANDER_POLL_MS: 3000 }, window.DUTY_CONFIG || {});
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -11,6 +12,11 @@
     get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (_) { return null; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} },
     del(k) { try { localStorage.removeItem(k); } catch (_) {} }
+  };
+  const sstore = {
+    get(k) { try { return JSON.parse(sessionStorage.getItem(k)); } catch (_) { return null; } },
+    set(k, v) { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch (_) {} },
+    del(k) { try { sessionStorage.removeItem(k); } catch (_) {} }
   };
   const params = new URLSearchParams(location.search);
   const UA = navigator.userAgent || '';
@@ -491,7 +497,11 @@
     if (target === 'home') { Staff.stop(); Cmd.stop(); show('home'); history.replaceState(null, '', location.pathname); return; }
     if (target === 'cmd-login') {
       if (Cmd.session()) return Cmd.enter();
-      show('cmd-login'); setTimeout(() => $('#cmdLoginForm [name=user]').focus(), 50); return;
+      show('cmd-login');
+      const f = $('#cmdLoginForm'), saved = store.get('dc_cmd_saved');
+      if (saved) { f.user.value = saved.user || ''; f.pin.value = saved.pin || ''; f.remember.checked = true; }
+      setTimeout(() => (saved ? f.querySelector('[type=submit]') : f.user).focus(), 50);
+      return;
     }
     if (target === 'staff') return Staff.enter();
   }
@@ -572,12 +582,17 @@
 
   const Cmd = {
     active: false, timer: null, busy: false, data: null, seenAcks: null, preset: null, target: 'ALL', search: '',
-    session() { return store.get('dc_cmd'); },
-    async login(user, pin) {
+    session() { return store.get('dc_cmd') || sstore.get('dc_cmd'); },
+    async login(user, pin, remember) {
       user = String(user || '').trim().toLowerCase();
       if (user !== 'commander' || pin !== '9999') throw new Error('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
       if (LIVE) await API.call('login', { user, pin });
-      store.set('dc_cmd', { user, pin });
+      if (remember) {
+        // จดจำไว้ในเครื่อง: เปิดครั้งต่อไปเข้าได้ทันที ไม่ต้องกรอกรหัส
+        store.set('dc_cmd', { user, pin }); store.set('dc_cmd_saved', { user, pin });
+      } else {
+        store.del('dc_cmd'); store.del('dc_cmd_saved'); sstore.set('dc_cmd', { user, pin });
+      }
     },
     enter() {
       show('cmd');
@@ -589,7 +604,11 @@
       this.timer = setInterval(() => this.poll(), CFG.COMMANDER_POLL_MS);
     },
     stop() { this.active = false; clearInterval(this.timer); this.timer = null; },
-    logout() { this.stop(); store.del('dc_cmd'); go('home'); },
+    logout(forget) {
+      this.stop(); store.del('dc_cmd'); sstore.del('dc_cmd');
+      if (forget) store.del('dc_cmd_saved');
+      go('home');
+    },
     creds() { const s = this.session() || {}; return { user: s.user, pin: s.pin }; },
 
     async poll() {
@@ -601,7 +620,7 @@
         this.detectAcks(d.calls);
         this.render();
       } catch (e) {
-        if (/รหัสผ่าน/.test(e.message)) { toast('err', 'เซสชันหมดอายุ', 'กรุณาเข้าสู่ระบบใหม่'); this.logout(); }
+        if (/รหัสผ่าน/.test(e.message)) { toast('err', 'เซสชันหมดอายุ', 'กรุณาเข้าสู่ระบบใหม่'); this.logout(true); }
       } finally { this.busy = false; }
     },
 
@@ -740,7 +759,15 @@
         Sound.unlock(); Notify.request();
         const f = e.currentTarget, btn = f.querySelector('[type=submit]'), err = $('#cmdLoginError');
         err.hidden = true; btn.disabled = true;
-        try { await this.login(f.user.value, f.pin.value); f.reset(); this.enter(); }
+        try {
+          const remember = f.remember.checked;
+          await this.login(f.user.value, f.pin.value, remember);
+          if (remember && 'PasswordCredential' in window && navigator.credentials) {
+            // ให้เบราว์เซอร์ (Chrome/Android) เสนอบันทึกรหัสผ่านด้วย
+            try { await navigator.credentials.store(new PasswordCredential({ id: f.user.value.trim().toLowerCase(), password: f.pin.value, name: 'Commander' })); } catch (_) {}
+          }
+          this.enter();
+        }
         catch (ex) { err.textContent = ex.message; err.hidden = false; }
         finally { btn.disabled = false; }
       });
@@ -870,6 +897,7 @@
     },
 
     hideAlarm() {
+      if (!$('#alarm').hidden) setTimeout(() => Updater.apply(), 1500); // อัปเดตที่รออยู่ทำต่อหลังตอบรับ
       $('#alarm').hidden = true;
       this.showing = null;
       Sound.stopAlarm();
@@ -983,9 +1011,60 @@
     }
   });
 
+  /* =====================================================================
+   * Auto update: ตรวจ version.json ทุก 1 นาที เจอเวอร์ชันใหม่ → รีเฟรชอัตโนมัติ
+   * ===================================================================== */
+  const Updater = {
+    pending: null,
+    async check() {
+      if (location.protocol === 'file:') return;
+      try {
+        const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+        if (!r.ok) return;
+        const v = String((await r.json()).version || '');
+        if (v && v !== APP_VERSION) { this.pending = v; this.apply(); }
+      } catch (_) {}
+    },
+    apply() {
+      if (!this.pending) return;
+      if (Staff.queue.length || !$('#alarm').hidden) return; // ห้ามรีเฟรชขณะเสียงเตือนดัง — รอจนกดตอบรับ
+      if (sstore.get('dc_upd_try') === this.pending) return;   // กันรีเฟรชวน ถ้ารีเฟรชแล้วยังได้ไฟล์เก่า
+      const onDuty = current === 'staff' && Staff.active && Sound.ready;
+      if (onDuty) {
+        // staff ที่กำลังเข้าเวร: หลังรีเฟรชต้องแตะเพื่อเปิดเสียงใหม่ จึงบังคับให้กดอัปเดตเอง (ระหว่างนี้ยังรับการเรียกได้ตามปกติ)
+        $('#updText').textContent = 'ระบบมีการปรับปรุง กรุณากดอัปเดต แล้วแตะ “เริ่ม” อีกครั้งเพื่อเปิดเสียงเตือน';
+        $('#updBtn').hidden = false; $('#updSpin').hidden = true;
+        $('#updateBox').hidden = false;
+        return;
+      }
+      this.reload();
+    },
+    async reload() {
+      sstore.set('dc_upd_try', this.pending);
+      $('#updText').textContent = 'กำลังอัปเดตเป็นเวอร์ชันล่าสุด…';
+      $('#updBtn').hidden = true; $('#updSpin').hidden = false;
+      $('#updateBox').hidden = false;
+      try {
+        const reg = swReg || (navigator.serviceWorker && await navigator.serviceWorker.getRegistration());
+        if (reg) await reg.update();
+        if (window.caches) await Promise.all((await caches.keys()).map(k => caches.delete(k)));
+      } catch (_) {}
+      setTimeout(() => location.reload(), 700);
+    },
+    init() {
+      $('#updBtn').addEventListener('click', () => this.reload());
+      $('#appVersion').textContent = 'v' + APP_VERSION;
+      setTimeout(() => this.check(), 3000);
+      setInterval(() => this.check(), 60000);
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') this.check(); });
+      window.addEventListener('online', () => this.check());
+    }
+  };
+
   Install.init();
   Cmd.init();
   Staff.init();
+  Updater.init();
 
   const role = params.get('role');
   if (role === 'commander' && Cmd.session()) Cmd.enter();
