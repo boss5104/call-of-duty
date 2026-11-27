@@ -254,6 +254,10 @@ em.muted { font-style: normal; font-size: 12px; }
 .presence::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: #4a5270; }
 .presence.on { color: var(--ok); }
 .presence.on::before { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.push-tag { display: inline-block; font-size: 11px; margin-left: 6px; }
+.person-main .push-tag { margin: 4px 0 0; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line-soft); }
+.push-tag.on { color: var(--ok); }
+.push-tag.off { color: #ffb36b; }
 
 .history { display: flex; flex-direction: column; gap: 8px; max-height: 460px; overflow: auto; }
 .hist { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--line-soft); }

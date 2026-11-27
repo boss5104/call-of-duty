@@ -2,8 +2,8 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.11.27-1452'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
-  const APP_CHANGES = 'แจ้งเตือนเด้งขึ้นจอแม้ปิดแอป/ล็อกจอ ดังซ้ำทุก 20 วินาทีจนกว่าจะกดตอบรับ';
+  const APP_VERSION = '2026.11.27-1457'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
+  const APP_CHANGES = 'แจ้งเตือนเด้งขึ้นจอแม้ปิดแอป ดังซ้ำจนกว่าจะตอบรับ · ผู้บังคับบัญชาเห็นว่าใครรับแจ้งเตือนตอนปิดแอปได้ (🔔)';
   const CFG = Object.assign({ API_URL: '', TEAMS: [], STAFF_POLL_MS: 4000, COMMANDER_POLL_MS: 3000 }, window.DUTY_CONFIG || {});
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -518,6 +518,14 @@
     return (navigator.platform || 'เครื่องคอมพิวเตอร์');
   }
 
+  // สถานะ push ของแต่ละคน (ฝั่งผู้บังคับบัญชา): รับแจ้งเตือนตอนปิดแอปได้หรือยัง
+  function pushTag(s, long) {
+    if (typeof s.push !== 'number') return '';
+    return s.push
+      ? `<span class="push-tag on" title="ปิดแอป/ล็อกจอก็ยังได้รับแจ้งเตือน">🔔${long ? ' รับแจ้งเตือนตอนปิดแอปได้' : ''}</span>`
+      : `<span class="push-tag off" title="ต้องเปิดแอปเวอร์ชันใหม่ 1 ครั้งและอนุญาตการแจ้งเตือน">🔕${long ? ' ยังไม่เปิดรับแจ้งเตือนตอนปิดแอป' : ''}</span>`;
+  }
+
   const Wake = {
     lock: null, want: false,
     async on() {
@@ -779,7 +787,7 @@
         const acks = c.responses.slice().sort((a, b) => a.at - b.at).map(r => `
           <div class="ack-item"><span class="ai-ico">✓</span><span class="ai-name">${esc(r.nickname)}<small>${esc(r.fullName)} · ${esc(r.team)}</small></span><span class="ai-time">${fmtTime(r.at)}</span></div>`).join('');
         const pend = pending.map(s => `
-          <div class="ack-item pending"><span class="ai-ico">…</span><span class="ai-name">${esc(s.nickname)}<small>${esc(s.firstName)} ${esc(s.lastName)} · ${esc(s.team)}</small></span><span class="ai-time">${s.online ? '<span class="presence on">ออนไลน์</span>' : '<span class="presence">ออฟไลน์</span>'}</span></div>`).join('');
+          <div class="ack-item pending"><span class="ai-ico">…</span><span class="ai-name">${esc(s.nickname)}<small>${esc(s.firstName)} ${esc(s.lastName)} · ${esc(s.team)}</small></span><span class="ai-time">${s.online ? '<span class="presence on">ออนไลน์</span>' : '<span class="presence">ออฟไลน์</span>'}${pushTag(s)}</span></div>`).join('');
         return `
           <div class="call-card ${parsePrio(c.priority).level === 'critical' ? 'critical' : ''}">
             <div class="call-top">
@@ -808,6 +816,7 @@
           <div class="person-main">
             <div class="person-name">${esc(s.nickname)} · ${esc(s.firstName)} ${esc(s.lastName)}</div>
             <div class="person-meta">${esc(s.team)} · LINE: ${esc(s.lineId)}</div>
+            ${pushTag(s, true)}
           </div>
           <span class="presence ${s.online ? 'on' : ''}" title="${esc(ago(s.lastSeen))}">${s.online ? 'ออนไลน์' : esc(ago(s.lastSeen))}</span>
         </div>`).join('') : `<div class="empty">${q ? 'ไม่พบรายชื่อที่ค้นหา' : 'ยังไม่มีผู้ลงทะเบียน'}</div>`);
@@ -837,8 +846,9 @@
       const btn = $('#sendCallBtn'); btn.disabled = true;
       try {
         const priority = p.priority + ';sound=' + this.tone;
-        await API.call('createCall', Object.assign(this.creds(), { message, detail, priority, target: this.target }));
-        toast('info', 'ส่งสัญญาณเรียกแล้ว', `${message} → ${tgt} · เสียง: ${toneName(this.tone)}`);
+        const r = await API.call('createCall', Object.assign(this.creds(), { message, detail, priority, target: this.target }));
+        toast('info', 'ส่งสัญญาณเรียกแล้ว', `${message} → ${tgt} · เสียง: ${toneName(this.tone)}` +
+          (typeof r.pushed === 'number' ? ` · เด้งแจ้งเตือนถึง ${r.pushed} เครื่อง` : ''));
         $('#callDetail').value = ''; $('#customMsg').value = '';
         this.preset = null; this.renderPresets();
         await this.poll();

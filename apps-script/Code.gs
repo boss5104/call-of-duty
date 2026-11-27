@@ -125,11 +125,14 @@ const ROUTES = {
     const staffRows = table_(SHEET.STAFF);
     const seen = CacheService.getScriptCache().getAll(staffRows.map(r => 'seen_' + r.StaffID));
     const now = Date.now();
+    const subs = {};
+    table_(SHEET.PUSH).forEach(s => { subs[s.StaffID] = (subs[s.StaffID] || 0) + 1; });
     const staff = staffRows.map(r => {
       const last = Number(seen['seen_' + r.StaffID]) || ms_(r.LastSeen);
       return {
         staffId: r.StaffID, firstName: r.FirstName, lastName: r.LastName, nickname: r.Nickname,
-        team: r.Team, lineId: r.LineID, lastSeen: last, online: now - last < ONLINE_WINDOW_MS
+        team: r.Team, lineId: r.LineID, lastSeen: last, online: now - last < ONLINE_WINDOW_MS,
+        push: subs[r.StaffID] || 0 // จำนวนเครื่องที่รับแจ้งเตือนตอนปิดแอปได้
       };
     });
     const resp = table_(SHEET.RESP);
