@@ -2,11 +2,11 @@
  * API_URL : ใส่ Web app URL ของ Google Apps Script (ลงท้ายด้วย /exec)
  *           ถ้าเว้นว่าง ระบบจะทำงานใน "โหมดทดลอง" (เก็บข้อมูลในเครื่องนี้เท่านั้น)
  *           หรือส่งต่อผ่านลิงก์ก็ได้: index.html?api=https://script.google.com/macros/s/xxx/exec
- * TEAMS   : รายชื่อทีมที่ให้เลือกตอนลงทะเบียน (พิมพ์ทีมอื่นเองได้)
+ * TEAMS   : ทีมที่ให้เลือกตอนลงทะเบียน (ต้องตรงกับ TEAMS ใน apps-script/Code.gs)
  */
 window.DUTY_CONFIG = {
   API_URL: 'https://script.google.com/macros/s/AKfycbxv89k08T6czXOIsI9EqQOOyQPROs-lK5YcKUnGvqOMm-pniw8rbZrhMvde2__b7eV5xA/exec',
-  TEAMS: ['ทีม Alpha', 'ทีม Bravo', 'ทีม Charlie', 'ทีม Delta', 'ฝ่ายอำนวยการ'],
+  TEAMS: ['ทีม A', 'ทีม B', 'ทีม C', 'ทีม D'],
   STAFF_POLL_MS: 4000,
   COMMANDER_POLL_MS: 3000,
   ORG_NAME: 'Modern Warfare',

@@ -12,6 +12,7 @@
 
 const COMMANDER_USER = 'commander';
 const COMMANDER_PIN  = '9999';
+const TEAMS = ['ทีม A', 'ทีม B', 'ทีม C', 'ทีม D']; // ทีมที่เลือกได้ตอนลงทะเบียน (ต้องตรงกับ config.js)
 const CALL_MAX_AGE_MS = 12 * 60 * 60 * 1000; // การเรียกที่เก่ากว่า 12 ชม. จะไม่แจ้งเตือนแล้ว
 const ONLINE_WINDOW_MS = 30 * 1000;
 
@@ -67,6 +68,7 @@ const ROUTES = {
       team: clean_(p.team), lineId: clean_(p.lineId)
     };
     Object.keys(f).forEach(k => { if (!f[k]) throw new Error('กรุณากรอกข้อมูลให้ครบทุกช่อง'); });
+    if (TEAMS.length && TEAMS.indexOf(f.team) < 0) throw new Error('กรุณาเลือกทีม: ' + TEAMS.join(' / '));
     const known = clean_(p.staffId) && table_(SHEET.STAFF).some(r => r.StaffID === clean_(p.staffId));
     const sub = validSub_(p.sub);
     if (REQUIRE_PUSH && !known && !sub) throw new Error('ต้องกดอนุญาตการแจ้งเตือนก่อน จึงจะลงทะเบียนได้');
@@ -214,7 +216,9 @@ const ROUTES = {
       }));
       return o;
     });
-    return { staff: staff, calls: calls, serverTime: now };
+    let pushLast = null;
+    try { pushLast = JSON.parse(PropertiesService.getScriptProperties().getProperty('PUSH_LAST') || 'null'); } catch (_) {}
+    return { staff: staff, calls: calls, serverTime: now, pushLast: pushLast };
   },
 
   /* ----- Push ----- */
@@ -258,7 +262,8 @@ const ROUTES = {
     const cache = CacheService.getScriptCache();
     subs.forEach(s => cache.put('ptest_' + hash_(s.Endpoint), '1', 120));
     Utilities.sleep(Math.min(15, Math.max(0, Number(p.delay) || 10)) * 1000);
-    return { sent: sendPush_(subs.map(s => ({ sub: s, data: { t: 'test' } }))) };
+    const sent = sendPush_(subs.map(s => ({ sub: s, data: { t: 'test' } })));
+    return { sent: sent, errors: sendPush_.errors || [] };
   }
 };
 
@@ -295,7 +300,7 @@ function savePushSub_(id, sub, device) {
   if (!sub) throw new Error('ข้อมูลการแจ้งเตือนไม่ถูกต้อง');
   const ep = String(sub.endpoint).trim();
   if (!table_(SHEET.STAFF).some(r => r.StaffID === id)) throw new Error('ไม่พบข้อมูลผู้ลงทะเบียน');
-  return withLock_(() => {
+  withLock_(() => {
     const sh = sheet_(SHEET.PUSH);
     const rows = table_(SHEET.PUSH);
     const i = rows.findIndex(r => r.Endpoint === ep);
@@ -305,6 +310,12 @@ function savePushSub_(id, sub, device) {
     bust_(SHEET.PUSH);
     return {};
   });
+  // เครื่องเพิ่งเปิดรับแจ้งเตือน และมีการเรียกค้างอยู่ → เริ่มตัวส่งซ้ำ (การเรียกที่ส่งก่อนเครื่องลงทะเบียนจะไม่ตกหล่น)
+  try {
+    const me = table_(SHEET.STAFF).find(r => r.StaffID === id);
+    if (me && pendingFor_(me).some(c => Date.now() - ms_(c.CreatedAt) < REMIND_FOR_MIN * 60000)) ensureTicker_();
+  } catch (err) { console.error('ticker: ' + err); }
+  return {};
 }
 
 /* ---------------- Push: ส่งซ้ำจนกว่าจะตอบรับ ---------------- */
@@ -373,8 +384,7 @@ function sendPush_(items) {
     const req = { url: s.Endpoint, method: 'post', muteHttpExceptions: true, followRedirects: false, headers: headers };
     if (s.P256dh && s.Auth) {
       try {
-        req.payload = wpEncrypt_(JSON.stringify(it.data), s.P256dh, s.Auth, eph);
-        req.contentType = 'application/octet-stream';
+        req.payload = Utilities.newBlob(wpEncrypt_(JSON.stringify(it.data), s.P256dh, s.Auth, eph), 'application/octet-stream');
         headers['Content-Encoding'] = 'aes128gcm';
       } catch (err) { console.warn('encrypt: ' + err); }
     }
@@ -382,16 +392,24 @@ function sendPush_(items) {
     return req;
   });
   let res = [];
-  try { res = UrlFetchApp.fetchAll(reqs); } catch (err) { console.error('push fetch: ' + err); return 0; }
+  const errors = [];
+  try { res = UrlFetchApp.fetchAll(reqs); }
+  catch (err) { console.error('push fetch: ' + err); errors.push(String(err).slice(0, 200)); }
   const gone = [];
   let ok = 0;
   res.forEach((r, i) => {
     const code = r.getResponseCode();
-    if (code >= 200 && code < 300) ok++;
-    else if (code === 404 || code === 410) gone.push(items[i].sub.Endpoint);
-    else console.warn('push ' + code + ': ' + r.getContentText().slice(0, 300));
+    if (code >= 200 && code < 300) { ok++; return; }
+    if (code === 404 || code === 410) gone.push(items[i].sub.Endpoint);
+    const msg = code + ' ' + (items[i].sub.Endpoint.match(/^https:\/\/([^/]+)/) || [])[1] + ': ' + r.getContentText().slice(0, 160);
+    console.warn('push ' + msg);
+    if (errors.length < 3) errors.push(msg);
   });
   if (gone.length) removeSubs_(gone);
+  sendPush_.errors = errors;
+  try {
+    PropertiesService.getScriptProperties().setProperty('PUSH_LAST', JSON.stringify({ at: Date.now(), sent: items.length, ok: ok, errors: errors }));
+  } catch (_) {}
   return ok;
 }
 

@@ -2,8 +2,8 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.11.27-1517'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
-  const APP_CHANGES = 'ปุ่มรีเฟรช · ปิดการเรียกทั้งหมด / ลบประวัติการเรียกเก่า · ลบรายชื่อรายคน/ทั้งหมด · ยกเลิกระบบโทร (ไม่มีค่าใช้จ่าย)';
+  const APP_VERSION = '2026.11.27-1527'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
+  const APP_CHANGES = 'ลงทะเบียนเลือกทีม A / B / C / D · ผู้บังคับบัญชาเห็นผลการส่งแจ้งเตือนล่าสุด · แก้การส่ง push';
   const CFG = Object.assign({ API_URL: '', TEAMS: [], STAFF_POLL_MS: 4000, COMMANDER_POLL_MS: 3000 }, window.DUTY_CONFIG || {});
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -549,8 +549,10 @@
       if (this.state !== 'on') { await Notify.request(); await this.ensure(true); }
       if (this.state !== 'on') return toast('err', 'ยังเปิดแจ้งเตือนเมื่อปิดแอปไม่ได้', this.label()[1]);
       toast('info', 'ปิดแอปหรือล็อกหน้าจอภายใน 10 วินาที', 'จะมีแจ้งเตือนทดสอบเด้งขึ้นมาบนหน้าจอ', 10000);
-      try { await API.call('pushTest', { staffId: p.staffId, delay: 10 }); }
-      catch (e) { toast('err', 'ส่งแจ้งเตือนทดสอบไม่สำเร็จ', e.message); }
+      try {
+        const r = await API.call('pushTest', { staffId: p.staffId, delay: 10 });
+        if (!r.sent) toast('err', 'ส่งแจ้งเตือนทดสอบไม่สำเร็จ', (r.errors && r.errors.join(' | ')) || 'บริการ push ไม่ตอบรับ', 15000);
+      } catch (e) { toast('err', 'ส่งแจ้งเตือนทดสอบไม่สำเร็จ', e.message); }
     },
     blocking() { return LIVE && ['off', 'needinstall', 'nosupport', 'error'].includes(this.state); },
     label() {
@@ -862,6 +864,12 @@
 
       // Roster
       $('#removeAllBtn').hidden = !staff.length;
+      const pd = $('#pushDiag'), pl = d.pushLast;
+      if (pl && pl.at) {
+        const bad = pl.ok < pl.sent;
+        pd.hidden = false; pd.classList.toggle('bad', bad);
+        pd.textContent = `แจ้งเตือนแบบ push ล่าสุด ${fmtTime(pl.at)}: ส่ง ${pl.sent} เครื่อง สำเร็จ ${pl.ok}` + (pl.errors && pl.errors.length ? ' · ผิดพลาด: ' + pl.errors.join(' | ') : '');
+      } else pd.hidden = true;
       $('#closeAllBtn').hidden = d.calls.filter(c => c.status === 'active').length < 2;
       $('#clearHistBtn').hidden = !d.calls.some(c => c.status !== 'active');
       const q = this.search.trim().toLowerCase();
@@ -1006,6 +1014,12 @@
       if (!Sound.ready) $('#gate').hidden = false;
     },
 
+    syncTeam() {
+      const v = $('#regForm').team.value;
+      $$('#teamPick [data-team]').forEach(b => { const on = b.dataset.team === v; b.classList.toggle('sel', on); b.setAttribute('aria-checked', on); });
+      if (v) $('#teamPick').classList.remove('invalid');
+    },
+
     showReg(edit) {
       this.stop();
       show('staff-reg');
@@ -1013,6 +1027,8 @@
       $('#regTitle').textContent = edit ? 'แก้ไขข้อมูลส่วนตัว' : 'ลงทะเบียนผู้ใต้บังคับบัญชา';
       $('#regSubmit').textContent = edit ? 'บันทึกข้อมูล' : 'ลงทะเบียน';
       ['firstName', 'lastName', 'nickname', 'team', 'lineId'].forEach(k => { f[k].value = edit ? (p[k] || '') : (f[k].value || ''); f[k].classList.remove('invalid'); });
+      if (!(CFG.TEAMS || []).includes(f.team.value)) f.team.value = ''; // ทีมเก่าที่ไม่มีแล้ว → ต้องเลือกใหม่
+      this.syncTeam();
       $('#regError').hidden = true;
       $('#regBack').textContent = edit ? '← กลับ' : '← กลับหน้าหลัก';
       $('#regBack').dataset.nav = edit ? 'staff' : 'home';
@@ -1196,8 +1212,11 @@
     },
 
     init() {
-      const dl = $('#teamList');
-      dl.innerHTML = (CFG.TEAMS || []).map(t => `<option value="${esc(t)}">`).join('');
+      $('#teamPick').innerHTML = (CFG.TEAMS || []).map(t => `<button type="button" role="radio" data-team="${esc(t)}">${esc(t.replace(/^ทีม\s*/, '') || t)}</button>`).join('');
+      $('#teamPick').addEventListener('click', e => {
+        const b = e.target.closest('[data-team]'); if (!b) return;
+        $('#regForm').team.value = b.dataset.team; this.syncTeam();
+      });
 
       $('#regForm').addEventListener('submit', async e => {
         e.preventDefault();
@@ -1207,6 +1226,8 @@
         const data = {};
         let bad = null;
         keys.forEach(k => { data[k] = f[k].value.trim(); const miss = !data[k]; f[k].classList.toggle('invalid', miss); if (miss && !bad) bad = f[k]; });
+        $('#teamPick').classList.toggle('invalid', !data.team);
+        if (bad && bad.type === 'hidden') { err.textContent = 'กรุณาเลือกทีม (A / B / C / D)'; err.hidden = false; $('#teamPick').scrollIntoView({ block: 'center', behavior: 'smooth' }); return; }
         if (bad) { err.textContent = 'กรุณากรอกข้อมูลให้ครบทุกช่อง'; err.hidden = false; bad.focus(); return; }
         err.hidden = true; btn.disabled = true;
         const prev = this.profile();
