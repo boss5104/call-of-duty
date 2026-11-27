@@ -2,7 +2,8 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.11.27-1427'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
+  const APP_VERSION = '2026.11.27-1433'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
+  const APP_CHANGES = 'ผู้บังคับบัญชาเลือกเสียงเตือนได้ 10 แบบตอนส่งการเรียก · จดจำรหัส · อัปเดตอัตโนมัติ';
   const CFG = Object.assign({ API_URL: '', TEAMS: [], STAFF_POLL_MS: 4000, COMMANDER_POLL_MS: 3000 }, window.DUTY_CONFIG || {});
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -149,13 +150,22 @@
     { id: 'march', icon: '🥁', name: 'มาร์ชทหาร', desc: 'กลองศึก + ไซเรน' }
   ];
 
+  /* priority เก็บเสียงที่ผู้บังคับบัญชาเลือกไว้ด้วย เช่น "critical;sound=airraid" (ไม่ต้องแก้ Google Sheet) */
+  const parsePrio = s => {
+    const [level, ...kv] = String(s || '').split(';');
+    const o = { level: level || 'normal', sound: '' };
+    kv.forEach(x => { const i = x.indexOf('='); if (i > 0) o[x.slice(0, i)] = x.slice(i + 1); });
+    if (!TONES.some(t => t.id === o.sound)) o.sound = '';
+    return o;
+  };
+  const toneName = id => (TONES.find(t => t.id === id) || {}).name || '';
+
   const Sound = {
     ctx: null, out: null, boost: null, timer: null, vibTimer: null, src: null, noise: null,
     playing: null, nextAt: 0, pvTimer: null,
     fileBuf: null, fileState: 'idle', // idle | loading | ok | none
 
-    get selected() { const id = store.get('dc_tone'); return TONES.some(t => t.id === id) ? id : 'hellmarch'; },
-    set selected(id) { store.set('dc_tone', id); },
+    selected: 'hellmarch', // เสียงตั้งต้น เมื่อการเรียกไม่ได้ระบุเสียง
 
     unlock() {
       try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (_) {} // iOS: ดังแม้เปิดโหมดเงียบ
@@ -373,7 +383,8 @@
       clearTimeout(this.pvTimer);
       this.stopLoops();
       this.play(id);
-      this.pvTimer = setTimeout(() => { this.stopLoops(); onEnd && onEnd(); }, 4000);
+      this.previewing = true;
+      this.pvTimer = setTimeout(() => { this.previewing = false; this.stopLoops(); onEnd && onEnd(); }, 4000);
     },
 
     stopLoops() {
@@ -389,7 +400,7 @@
       }
     },
     stopAlarm() {
-      clearTimeout(this.pvTimer);
+      clearTimeout(this.pvTimer); this.previewing = false;
       this.stopLoops();
       clearInterval(this.vibTimer); this.vibTimer = null;
       try { navigator.vibrate && navigator.vibrate(0); } catch (_) {}
@@ -582,6 +593,8 @@
 
   const Cmd = {
     active: false, timer: null, busy: false, data: null, seenAcks: null, preset: null, target: 'ALL', search: '',
+    get tone() { const t = store.get('dc_cmd_tone'); return TONES.some(x => x.id === t) ? t : 'hellmarch'; },
+    set tone(v) { store.set('dc_cmd_tone', v); },
     session() { return store.get('dc_cmd') || sstore.get('dc_cmd'); },
     async login(user, pin, remember) {
       user = String(user || '').trim().toLowerCase();
@@ -597,7 +610,7 @@
     enter() {
       show('cmd');
       history.replaceState(null, '', '?role=commander');
-      this.renderPresets(); this.renderTargets();
+      this.renderPresets(); this.renderTargets(); this.renderTones();
       this.active = true; this.seenAcks = null;
       this.poll();
       clearInterval(this.timer);
@@ -662,6 +675,17 @@
       if ($('#targetSeg').innerHTML !== html) $('#targetSeg').innerHTML = html;
     },
 
+    renderTones() {
+      const cur = this.tone;
+      setHTML($('#cmdToneGrid'), TONES.map(t => `
+        <button type="button" class="tone ${t.id === cur ? 'sel' : ''}" data-tone="${t.id}">
+          <span class="tone-ic">${t.icon}</span>
+          <span class="tone-txt"><span class="tone-name">${esc(t.name)}</span><span class="tone-desc">${esc(t.desc)}</span></span>
+          <span class="tone-check">${t.id === cur ? '✓' : '▶'}</span>
+        </button>`).join(''));
+      $('#cmdToneCurrent').textContent = toneName(cur);
+    },
+
     render() {
       const d = this.data; if (!d) return;
       const staff = d.staff || [];
@@ -683,11 +707,11 @@
         const pend = pending.map(s => `
           <div class="ack-item pending"><span class="ai-ico">…</span><span class="ai-name">${esc(s.nickname)}<small>${esc(s.firstName)} ${esc(s.lastName)} · ${esc(s.team)}</small></span><span class="ai-time">${s.online ? '<span class="presence on">ออนไลน์</span>' : '<span class="presence">ออฟไลน์</span>'}</span></div>`).join('');
         return `
-          <div class="call-card ${c.priority === 'critical' ? 'critical' : ''}">
+          <div class="call-card ${parsePrio(c.priority).level === 'critical' ? 'critical' : ''}">
             <div class="call-top">
               <div>
                 <div class="call-msg">${esc(c.message)}</div>
-                <div class="call-sub">${fmtDateTime(c.createdAt)} · ผู้รับ: ${c.target === 'ALL' || !c.target ? 'ทุกคน' : esc(c.target)}</div>
+                <div class="call-sub">${fmtDateTime(c.createdAt)} · ผู้รับ: ${c.target === 'ALL' || !c.target ? 'ทุกคน' : esc(c.target)} · เสียง: ${esc(toneName(parsePrio(c.priority).sound) || toneName(Sound.selected))}</div>
                 ${c.detail ? `<div class="call-detail">${esc(c.detail)}</div>` : ''}
               </div>
               <span class="tag active">กำลังเรียก</span>
@@ -735,11 +759,12 @@
         if (!message) { $('#customMsg').focus(); return toast('err', 'กรุณาพิมพ์ข้อความเรียก'); }
       }
       const tgt = this.target === 'ALL' ? 'ทุกคน' : this.target;
-      if (!await confirmBox('ยืนยันการส่งสัญญาณเรียก', `“${message}” ถึง ${tgt}`, 'ส่งสัญญาณ')) return;
+      if (!await confirmBox('ยืนยันการส่งสัญญาณเรียก', `“${message}” ถึง ${tgt} · เสียง: ${toneName(this.tone)}`, 'ส่งสัญญาณ')) return;
       const btn = $('#sendCallBtn'); btn.disabled = true;
       try {
-        await API.call('createCall', Object.assign(this.creds(), { message, detail, priority: p.priority, target: this.target }));
-        toast('info', 'ส่งสัญญาณเรียกแล้ว', `${message} → ${tgt}`);
+        const priority = p.priority + ';sound=' + this.tone;
+        await API.call('createCall', Object.assign(this.creds(), { message, detail, priority, target: this.target }));
+        toast('info', 'ส่งสัญญาณเรียกแล้ว', `${message} → ${tgt} · เสียง: ${toneName(this.tone)}`);
         $('#callDetail').value = ''; $('#customMsg').value = '';
         this.preset = null; this.renderPresets();
         await this.poll();
@@ -775,6 +800,12 @@
         const b = e.target.closest('[data-preset]'); if (!b) return;
         this.preset = b.dataset.preset; this.renderPresets();
         if (this.preset === 'custom') $('#customMsg').focus();
+      });
+      $('#cmdToneGrid').addEventListener('click', e => {
+        const b = e.target.closest('[data-tone]'); if (!b) return;
+        this.tone = b.dataset.tone; this.renderTones();
+        Sound.unlock();
+        Sound.preview(b.dataset.tone);
       });
       $('#targetSeg').addEventListener('click', e => {
         const b = e.target.closest('[data-target]'); if (!b) return;
@@ -892,7 +923,9 @@
       }
       $('#alarmQueue').textContent = this.queue.length > 1 ? `มีอีก ${this.queue.length - 1} คำสั่งรอการตอบรับ` : '';
       a.hidden = false;
-      Sound.startAlarm();
+      const want = this.wantTone(c);
+      if (Sound.playing && Sound.playing !== want && !Sound.previewing) Sound.stopLoops();
+      Sound.startAlarm(want);
       if (!this._title) { this._title = document.title; this._flip = setInterval(() => { document.title = document.title === '🚨 มีการเรียก!' ? this._title : '🚨 มีการเรียก!'; }, 900); }
     },
 
@@ -922,24 +955,14 @@
       }
     },
 
-    renderTones() {
-      const sel = Sound.selected;
-      setHTML($('#toneGrid'), TONES.map(t => `
-        <button type="button" class="tone ${t.id === sel ? 'sel' : ''}" data-tone="${t.id}">
-          <span class="tone-ic">${t.icon}</span>
-          <span class="tone-txt"><span class="tone-name">${esc(t.name)}</span><span class="tone-desc">${esc(t.desc)}</span></span>
-          <span class="tone-check">${t.id === sel ? '✓' : '▶'}</span>
-        </button>`).join(''));
-      const cur = TONES.find(t => t.id === sel);
-      $('#toneCurrent').textContent = cur ? cur.name : '';
-    },
+    wantTone(c) { return (c && parsePrio(c.priority).sound) || Sound.selected; },
 
     previewTone(id) {
       Sound.unlock();
       $('#testAlarmBtn').disabled = true;
       Sound.preview(id, () => {
         $('#testAlarmBtn').disabled = false;
-        if (this.queue.length) Sound.startAlarm(); // มีการเรียกค้างอยู่ → เล่นเสียงเตือนต่อ
+        if (this.queue.length) Sound.startAlarm(this.wantTone(this.queue[0])); // มีการเรียกค้างอยู่ → เล่นเสียงเตือนต่อ
         this.renderChecks();
       });
     },
@@ -984,13 +1007,6 @@
       $('#editProfileBtn').addEventListener('click', () => this.showReg(true));
       $('#enableNotifBtn').addEventListener('click', async () => { await Notify.request(); this.renderChecks(); });
       $('#testAlarmBtn').addEventListener('click', () => this.previewTone(Sound.selected));
-      $('#toneGrid').addEventListener('click', e => {
-        const b = e.target.closest('[data-tone]'); if (!b) return;
-        Sound.selected = b.dataset.tone;
-        this.renderTones();
-        this.previewTone(b.dataset.tone);
-      });
-      this.renderTones();
     }
   };
 
@@ -1054,6 +1070,10 @@
     init() {
       $('#updBtn').addEventListener('click', () => this.reload());
       $('#appVersion').textContent = 'v' + APP_VERSION;
+      const last = store.get('dc_ver');
+      const used = last || store.get('dc_cmd') || store.get('dc_cmd_saved') || store.get('dc_staff');
+      if (used && last !== APP_VERSION) setTimeout(() => toast('info', 'อัปเดตเป็นเวอร์ชันล่าสุดแล้ว', 'v' + APP_VERSION + ' — ' + APP_CHANGES, 12000), 800);
+      store.set('dc_ver', APP_VERSION);
       setTimeout(() => this.check(), 3000);
       setInterval(() => this.check(), 60000);
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') this.check(); });
