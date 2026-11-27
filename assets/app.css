@@ -354,9 +354,7 @@ em.muted { font-style: normal; font-size: 12px; }
 .gate-help ol { margin: 6px 0 0; padding-left: 20px; }
 .reg-note { margin: 4px 0 12px; padding: 10px 12px; border-radius: 12px; font-size: 13px; line-height: 1.6; background: rgba(201,165,76,.08); border: 1px solid var(--line); color: var(--muted); }
 .reg-note b { color: var(--gold-hi); }
-.voice-note { margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; font-size: 13px; line-height: 1.6; background: rgba(255,179,107,.08); border: 1px solid rgba(255,179,107,.35); color: #ffcf9e; }
-.voice-note.ok { background: rgba(46,204,113,.08); border-color: rgba(46,204,113,.35); color: #8fe3b0; }
-#removeAllBtn { margin-top: 14px; width: 100%; }
+#removeAllBtn, .wide-btn { margin-top: 14px; width: 100%; }
 .btn-ghost.danger { color: #ff9a9d; border-color: rgba(255,90,95,.4); }
 .person-actions .btn-ghost.sm { font-size: 11px; padding: 4px 10px; }
 .person-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }

@@ -2,8 +2,8 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.11.27-1512'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
-  const APP_CHANGES = 'โทรเข้าเบอร์มือถืออัตโนมัติจนกว่าจะตอบรับ (Twilio) · ต้องใส่เบอร์โทรตอนลงทะเบียน · ผู้บังคับบัญชาลบรายชื่อได้';
+  const APP_VERSION = '2026.11.27-1517'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
+  const APP_CHANGES = 'ปุ่มรีเฟรช · ปิดการเรียกทั้งหมด / ลบประวัติการเรียกเก่า · ลบรายชื่อรายคน/ทั้งหมด · ยกเลิกระบบโทร (ไม่มีค่าใช้จ่าย)';
   const CFG = Object.assign({ API_URL: '', TEAMS: [], STAFF_POLL_MS: 4000, COMMANDER_POLL_MS: 3000 }, window.DUTY_CONFIG || {});
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -80,7 +80,7 @@
       switch (action) {
         case 'login': cmd(); return { ok: true };
         case 'register': {
-          const f = ['firstName', 'lastName', 'nickname', 'team', 'lineId', 'phone'].reduce((o, k) => (o[k] = String(p[k] || '').trim(), o), {});
+          const f = ['firstName', 'lastName', 'nickname', 'team', 'lineId'].reduce((o, k) => (o[k] = String(p[k] || '').trim(), o), {});
           if (Object.values(f).some(v => !v)) throw new Error('กรุณากรอกข้อมูลให้ครบทุกช่อง');
           let s = d.staff.find(x => x.staffId === p.staffId);
           if (s) Object.assign(s, f);
@@ -113,7 +113,14 @@
           return { ok: true, callId: c.callId };
         }
         case 'removeAllStaff': { cmd(); const n = d.staff.length; d.staff = []; save(); return { ok: true, removed: n }; }
-        case 'testCall': cmd(); throw new Error('โหมดทดลองโทรไม่ได้ ต้องเชื่อม Google Sheet + Twilio');
+        case 'closeAllCalls': { cmd(); let n = 0; d.calls.forEach(c => { if (c.status === 'active') { c.status = 'closed'; c.closedAt = now; n++; } }); save(); return { ok: true, closed: n }; }
+        case 'clearHistory': {
+          cmd();
+          const keep = new Set(d.calls.filter(c => c.status === 'active').map(c => c.callId));
+          const n = d.calls.length - keep.size;
+          d.calls = d.calls.filter(c => keep.has(c.callId)); d.resp = d.resp.filter(r => keep.has(r.callId)); save();
+          return { ok: true, removed: n };
+        }
         case 'removeStaff': {
           cmd();
           d.staff = d.staff.filter(x => x.staffId !== p.staffId); save();
@@ -466,6 +473,13 @@
         const reg = swReg || (navigator.serviceWorker && await navigator.serviceWorker.getRegistration());
         if (reg) return reg.showNotification(title, opt);
         new Notification(title, opt);
+      } catch (_) {}
+    },
+    /** ลบแจ้งเตือนการเรียกเก่าที่ไม่ต้องตอบรับแล้วออกจากถาดแจ้งเตือน */
+    async clearStale(liveIds) {
+      try {
+        const reg = swReg || (navigator.serviceWorker && await navigator.serviceWorker.getRegistration());
+        if (reg) (await reg.getNotifications()).forEach(n => { if (/^call-/.test(n.tag) && !liveIds.has(n.tag.slice(5))) n.close(); });
       } catch (_) {}
     },
     async clear(tag) {
@@ -847,14 +861,9 @@
       }).join('') : '<div class="empty">ยังไม่มีการเรียกที่เปิดอยู่<br>เลือกประเภทการเรียกแล้วกด “ส่งสัญญาณเรียก”</div>');
 
       // Roster
-      const vn = $('#voiceNote');
-      if (typeof d.voice === 'boolean') {
-        vn.hidden = false; vn.classList.toggle('ok', d.voice);
-        vn.textContent = d.voice
-          ? '📞 โทรอัตโนมัติ: เปิดอยู่ — คนที่ไม่ตอบรับจะถูกโทรเข้าเบอร์มือถือซ้ำจนกว่าจะตอบรับ (กด 1 ในสาย หรือกดรับทราบในแอป)'
-          : '📞 โทรอัตโนมัติ: ยังไม่ได้ตั้งค่า — ใส่ TWILIO_SID / TWILIO_TOKEN / TWILIO_FROM ในพร็อพเพอร์ตีสคริปต์ของ Apps Script (ดู README)';
-      } else vn.hidden = true;
       $('#removeAllBtn').hidden = !staff.length;
+      $('#closeAllBtn').hidden = d.calls.filter(c => c.status === 'active').length < 2;
+      $('#clearHistBtn').hidden = !d.calls.some(c => c.status !== 'active');
       const q = this.search.trim().toLowerCase();
       const roster = staff.filter(s => !q || [s.firstName, s.lastName, s.nickname, s.team, s.lineId].join(' ').toLowerCase().includes(q))
         .sort((a, b) => (b.online - a.online) || String(a.team).localeCompare(b.team, 'th') || String(a.nickname).localeCompare(b.nickname, 'th'));
@@ -863,12 +872,11 @@
           <div class="avatar">${esc(initials(s.nickname))}</div>
           <div class="person-main">
             <div class="person-name">${esc(s.nickname)} · ${esc(s.firstName)} ${esc(s.lastName)}</div>
-            <div class="person-meta">${esc(s.team)} · LINE: ${esc(s.lineId)}${s.phone ? ' · 📞 ' + esc(s.phone) : ''}</div>
-            ${pushTag(s, true)}${typeof s.phone === 'string' && !s.phone ? '<span class="push-tag off">📵 ไม่มีเบอร์โทร</span>' : ''}
+            <div class="person-meta">${esc(s.team)} · LINE: ${esc(s.lineId)}</div>
+            ${pushTag(s, true)}
           </div>
           <div class="person-actions">
             <span class="presence ${s.online ? 'on' : ''}" title="${esc(ago(s.lastSeen))}">${s.online ? 'ออนไลน์' : esc(ago(s.lastSeen))}</span>
-            ${s.phone && d.voice ? `<button class="btn-ghost sm" type="button" data-test-call="${esc(s.staffId)}" data-name="${esc(s.nickname)}">📞 ทดสอบโทร</button>` : ''}
             <button class="btn-ghost sm" type="button" data-remove-staff="${esc(s.staffId)}" data-name="${esc(s.nickname)}">ลบ / ให้ลงทะเบียนใหม่</button>
           </div>
         </div>`).join('') : `<div class="empty">${q ? 'ไม่พบรายชื่อที่ค้นหา' : 'ยังไม่มีผู้ลงทะเบียน'}</div>`);
@@ -900,8 +908,7 @@
         const priority = p.priority + ';sound=' + this.tone;
         const r = await API.call('createCall', Object.assign(this.creds(), { message, detail, priority, target: this.target }));
         toast('info', 'ส่งสัญญาณเรียกแล้ว', `${message} → ${tgt} · เสียง: ${toneName(this.tone)}` +
-          (typeof r.pushed === 'number' ? ` · เด้งแจ้งเตือนถึง ${r.pushed} เครื่อง` : '') +
-          (r.voice ? ` · โทรอัตโนมัติหาผู้ที่ไม่ตอบรับ (${r.calling || 0} คน)` : ''));
+          (typeof r.pushed === 'number' ? ` · เด้งแจ้งเตือนถึง ${r.pushed} เครื่อง` : ''));
         $('#callDetail').value = ''; $('#customMsg').value = '';
         this.preset = null; this.renderPresets();
         await this.poll();
@@ -911,15 +918,11 @@
 
     async removeAll() {
       const n = (this.data && this.data.staff || []).length;
-      if (!await confirmBox('ลบรายชื่อทุกคน ' + n + ' คน?', 'ทุกเครื่องต้องลงทะเบียนใหม่เมื่อเปิดแอปครั้งถัดไป (ต้องอนุญาตการแจ้งเตือน + ใส่เบอร์โทร) · ประวัติการเรียกและการตอบรับยังอยู่ · ย้อนกลับไม่ได้', 'ลบทั้งหมด')) return;
+      if (!await confirmBox('ลบรายชื่อทุกคน ' + n + ' คน?', 'ทุกเครื่องต้องลงทะเบียนใหม่เมื่อเปิดแอปครั้งถัดไป (ต้องอนุญาตการแจ้งเตือน) · ประวัติการเรียกและการตอบรับยังอยู่ · ย้อนกลับไม่ได้', 'ลบทั้งหมด')) return;
       try {
         const r = await API.call('removeAllStaff', Object.assign(this.creds(), { confirm: 'DELETE' }));
         toast('info', 'ลบรายชื่อแล้ว ' + (r.removed || 0) + ' คน', 'ทุกคนต้องลงทะเบียนใหม่เมื่อเปิดแอป'); this.poll();
       } catch (e) { toast('err', 'ไม่สำเร็จ', e.message); }
-    },
-    async testCall(staffId, name) {
-      try { await API.call('testCall', Object.assign(this.creds(), { staffId })); toast('ok', 'กำลังโทรหา ' + name, 'โทรศัพท์ของเขาควรดังภายในไม่กี่วินาที'); }
-      catch (e) { toast('err', 'โทรไม่สำเร็จ', e.message); }
     },
     async removeStaff(staffId, name) {
       if (!await confirmBox('ลบ ' + name + ' ออกจากทะเบียน?', 'เมื่อเปิดแอปครั้งถัดไป เครื่องนั้นต้องลงทะเบียนใหม่ และต้องกดอนุญาตการแจ้งเตือนจึงจะลงทะเบียนได้', 'ลบรายชื่อ')) return;
@@ -973,9 +976,18 @@
       $('#rosterSearch').addEventListener('input', e => { this.search = e.target.value; this.render(); });
       $('#roster').addEventListener('click', e => {
         const b = e.target.closest('[data-remove-staff]'); if (b) this.removeStaff(b.dataset.removeStaff, b.dataset.name);
-        const t = e.target.closest('[data-test-call]'); if (t) this.testCall(t.dataset.testCall, t.dataset.name);
       });
       $('#removeAllBtn').addEventListener('click', () => this.removeAll());
+      $('#closeAllBtn').addEventListener('click', async () => {
+        if (!await confirmBox('ปิดการเรียกทั้งหมด?', 'ทุกเครื่องจะหยุดได้รับสัญญาณเตือนของการเรียกที่เปิดอยู่', 'ปิดทั้งหมด')) return;
+        try { const r = await API.call('closeAllCalls', this.creds()); toast('info', 'ปิดการเรียกแล้ว ' + (r.closed || 0) + ' รายการ'); this.poll(); }
+        catch (e) { toast('err', 'ไม่สำเร็จ', e.message); }
+      });
+      $('#clearHistBtn').addEventListener('click', async () => {
+        if (!await confirmBox('ลบประวัติการเรียกเก่า?', 'ลบการเรียกที่ปิดแล้วทั้งหมดและรายชื่อผู้ตอบรับของการเรียกเหล่านั้นออกจาก Google Sheet · ย้อนกลับไม่ได้', 'ลบประวัติ')) return;
+        try { const r = await API.call('clearHistory', this.creds()); toast('info', 'ลบประวัติแล้ว ' + (r.removed || 0) + ' รายการ'); this.poll(); }
+        catch (e) { toast('err', 'ไม่สำเร็จ', e.message); }
+      });
     }
   };
 
@@ -1000,7 +1012,7 @@
       const f = $('#regForm'), p = this.profile() || {};
       $('#regTitle').textContent = edit ? 'แก้ไขข้อมูลส่วนตัว' : 'ลงทะเบียนผู้ใต้บังคับบัญชา';
       $('#regSubmit').textContent = edit ? 'บันทึกข้อมูล' : 'ลงทะเบียน';
-      ['firstName', 'lastName', 'nickname', 'team', 'lineId', 'phone'].forEach(k => { f[k].value = edit ? (p[k] || '') : (f[k].value || ''); f[k].classList.remove('invalid'); });
+      ['firstName', 'lastName', 'nickname', 'team', 'lineId'].forEach(k => { f[k].value = edit ? (p[k] || '') : (f[k].value || ''); f[k].classList.remove('invalid'); });
       $('#regError').hidden = true;
       $('#regBack').textContent = edit ? '← กลับ' : '← กลับหน้าหลัก';
       $('#regBack').dataset.nav = edit ? 'staff' : 'home';
@@ -1013,7 +1025,6 @@
       $('#pfName').textContent = `${p.nickname} · ${p.firstName} ${p.lastName}`;
       $('#pfTeam').textContent = p.team;
       $('#pfLine').textContent = 'LINE: ' + p.lineId;
-      $('#pfPhone').textContent = '📞 ' + (p.phone || 'ยังไม่มีเบอร์');
       this.start();
     },
 
@@ -1093,13 +1104,6 @@
           toast('err', 'ไม่พบข้อมูลการลงทะเบียน', 'กรุณาลงทะเบียนใหม่อีกครั้ง');
           return this.showReg(false);
         }
-        if (r.needPhone && !this.phoneAsked && !this.queue.length) {
-          this.phoneAsked = true;
-          this.showReg(true);
-          $('#regError').textContent = 'กรุณาเพิ่มเบอร์โทรศัพท์มือถือ — ถ้าไม่ตอบรับการเรียก ระบบจะโทรเข้าเบอร์นี้อัตโนมัติ';
-          $('#regError').hidden = false;
-          return;
-        }
         const incoming = r.calls.filter(c => !this.acked.has(c.callId));
         const ids = new Set(incoming.map(c => c.callId));
         const before = new Set(this.queue.map(c => c.callId));
@@ -1107,6 +1111,7 @@
         incoming.filter(c => !before.has(c.callId)).forEach(c =>
           Notify.show('🚨 ' + c.message, (c.detail || 'แตะเพื่อเปิดและกดตอบรับ'), 'call-' + c.callId, true));
         before.forEach(id => { if (!ids.has(id)) Notify.clear('call-' + id); });
+        Notify.clearStale(ids);
         if (this.queue.length) this.ring(); else this.hideAlarm();
       } catch (_) {
         this.setOnline(false);
@@ -1198,12 +1203,11 @@
         e.preventDefault();
         Sound.unlock();
         const f = e.currentTarget, err = $('#regError'), btn = $('#regSubmit');
-        const keys = ['firstName', 'lastName', 'nickname', 'team', 'lineId', 'phone'];
+        const keys = ['firstName', 'lastName', 'nickname', 'team', 'lineId'];
         const data = {};
         let bad = null;
         keys.forEach(k => { data[k] = f[k].value.trim(); const miss = !data[k]; f[k].classList.toggle('invalid', miss); if (miss && !bad) bad = f[k]; });
         if (bad) { err.textContent = 'กรุณากรอกข้อมูลให้ครบทุกช่อง'; err.hidden = false; bad.focus(); return; }
-        if (!/^\+?\d{9,15}$/.test(data.phone.replace(/[\s-]/g, ''))) { f.phone.classList.add('invalid'); err.textContent = 'กรุณากรอกเบอร์โทรศัพท์มือถือให้ถูกต้อง (เช่น 0812345678)'; err.hidden = false; f.phone.focus(); return; }
         err.hidden = true; btn.disabled = true;
         const prev = this.profile();
         try {
@@ -1240,6 +1244,17 @@
   badge.className = 'mode-badge ' + (LIVE ? 'live' : 'demo');
   badge.textContent = LIVE ? '● ออนไลน์' : 'โหมดทดลอง';
   badge.title = LIVE ? 'เชื่อมต่อ Google Sheet แล้ว' : 'ยังไม่ได้ตั้งค่า API_URL — ข้อมูลเก็บในเครื่องนี้เท่านั้น';
+
+  $('#refreshBtn').addEventListener('click', async () => {
+    // รีเฟรชเต็มรูปแบบ: ล้างแคช + อัปเดต service worker + ลบแจ้งเตือนเก่า แล้วโหลดใหม่
+    try {
+      const reg = swReg || (navigator.serviceWorker && await navigator.serviceWorker.getRegistration());
+      if (reg) (await reg.getNotifications()).forEach(n => { if (!/^call-/.test(n.tag) || !Staff.queue.some(c => 'call-' + c.callId === n.tag)) n.close(); });
+    } catch (_) {}
+    sstore.del('dc_upd_try');
+    Updater.pending = Updater.pending || 'manual';
+    Updater.reload();
+  });
 
   $('#logoutBtn').addEventListener('click', async () => {
     if (current === 'cmd') return Cmd.logout();
