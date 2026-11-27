@@ -217,9 +217,18 @@
           <div class="check" id="ckConn"><i></i><span>การเชื่อมต่อ</span><em>–</em></div>
         </div>
 
+        <div class="tone-picker">
+          <div class="tone-head">
+            <div><strong>เสียงเตือนของฉัน</strong><span class="muted-sm">กำลังใช้: <b id="toneCurrent">–</b></span></div>
+            <em>แตะเพื่อเลือก + ฟังตัวอย่าง</em>
+          </div>
+          <div class="tone-grid" id="toneGrid"></div>
+          <p class="tone-note">🔊 เปิดเสียงโทรศัพท์ให้สุด · ปิดโหมดห้ามรบกวน เพื่อให้ปลุกตื่นได้แน่นอน</p>
+        </div>
+
         <div class="btn-stack">
           <button class="btn-gold block" type="button" id="enableNotifBtn" hidden>อนุญาตการแจ้งเตือน</button>
-          <button class="btn-outline block" type="button" id="testAlarmBtn">ทดสอบเสียงเตือน</button>
+          <button class="btn-outline block" type="button" id="testAlarmBtn">ทดสอบเสียงเตือนที่เลือก</button>
           <button class="btn-gold block" type="button" data-install id="staffInstallBtn" hidden>เพิ่มไปยังหน้าจอโฮม</button>
           <button class="btn-ghost block" type="button" id="editProfileBtn">แก้ไขข้อมูล</button>
         </div>

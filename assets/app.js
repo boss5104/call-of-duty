@@ -129,9 +129,27 @@
   /* =====================================================================
    * Sound / vibration / notifications / wake lock
    * ===================================================================== */
+  /* ---------- รายการเสียงเตือน (สังเคราะห์ในเครื่อง ยกเว้น Hell March 2 ที่เป็นไฟล์) ---------- */
+  const TONES = [
+    { id: 'hellmarch', icon: '🎖️', name: 'Hell March 2', desc: 'เพลงมาร์ชสุดโหด' },
+    { id: 'mega', icon: '💥', name: 'ปลุกตายยาก', desc: 'ไซเรน + บี๊บ + แตร + กลอง รวมกัน' },
+    { id: 'airraid', icon: '🚨', name: 'ไซเรนภัยทางอากาศ', desc: 'หวอยาว ดังลั่น' },
+    { id: 'yelp', icon: '🚓', name: 'ไซเรนรถฉุกเฉิน', desc: 'หวีดถี่ เร่งเร้า' },
+    { id: 'klaxon', icon: '⚓', name: 'แตรสถานีรบ', desc: 'อู้ก้า! แบบเรือรบ' },
+    { id: 'smoke', icon: '🔥', name: 'สัญญาณไฟไหม้', desc: 'บี๊บแหลม 3 จังหวะ' },
+    { id: 'digital', icon: '⏰', name: 'นาฬิกาปลุกดิจิทัล', desc: 'บี๊บ ๆ ถี่ แหลมสูง' },
+    { id: 'bell', icon: '🔔', name: 'กระดิ่งนาฬิกาปลุก', desc: 'กริ๊งรัวแบบโบราณ' },
+    { id: 'bugle', icon: '🎺', name: 'แตรเรียกพล', desc: 'แตรทหาร ปลุกเข้าแถว' },
+    { id: 'march', icon: '🥁', name: 'มาร์ชทหาร', desc: 'กลองศึก + ไซเรน' }
+  ];
+
   const Sound = {
     ctx: null, out: null, boost: null, timer: null, vibTimer: null, src: null, noise: null,
+    playing: null, nextAt: 0, pvTimer: null,
     fileBuf: null, fileState: 'idle', // idle | loading | ok | none
+
+    get selected() { const id = store.get('dc_tone'); return TONES.some(t => t.id === id) ? id : 'hellmarch'; },
+    set selected(id) { store.set('dc_tone', id); },
 
     unlock() {
       try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (_) {} // iOS: ดังแม้เปิดโหมดเงียบ
@@ -150,7 +168,7 @@
       } catch (_) { return false; }
     },
 
-    /* ขยายเสียง → ลิมิตเตอร์ → ส่งออกเต็ม 0 dBFS (ดังที่สุดเท่าที่เบราว์เซอร์ส่งออกได้) */
+    /* ขยายเสียง → ลิมิตเตอร์ → soft clip: ดังที่สุดเท่าที่เบราว์เซอร์ส่งออกได้ */
     buildChain() {
       const c = this.ctx;
       this.boost = c.createGain();
@@ -160,7 +178,7 @@
       lim.attack.value = 0.001; lim.release.value = 0.08;
       const makeup = c.createGain();
       makeup.gain.value = 2.2;
-      const clip = c.createWaveShaper(); // soft clip กันเสียงแตกหนักเกินไปแต่ยังดังเต็มที่
+      const clip = c.createWaveShaper();
       const n = 2048, curve = new Float32Array(n);
       for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; curve[i] = Math.tanh(2.2 * x) / Math.tanh(2.2); }
       clip.curve = curve;
@@ -176,27 +194,52 @@
         .then(ab => new Promise((res, rej) => { const p = this.ctx.decodeAudioData(ab, res, rej); if (p && p.then) p.then(res, rej); }))
         .then(buf => {
           this.fileBuf = buf; this.fileState = 'ok';
-          if (this.timer) { this.stopLoops(); this.startAlarm(); } // สลับจากเสียงสังเคราะห์เป็นไฟล์ทันที
+          if (this.playing === 'hellmarch') { this.stopLoops(); this.play('hellmarch'); } // สลับจากเสียงสำรองเป็นเพลงทันที
         })
         .catch(() => { this.fileState = 'none'; });
     },
 
     get ready() { return !!this.ctx && this.ctx.state === 'running'; },
 
-    tone(freq, at, dur, type = 'sine', vol = .2, dest) {
+    /* ---------- building blocks ---------- */
+    env(g, at, dur, vol, attack = .01) {
+      g.gain.setValueAtTime(0, at);
+      g.gain.linearRampToValueAtTime(vol, at + attack);
+      g.gain.setValueAtTime(vol, Math.max(at + attack, at + dur - .02));
+      g.gain.linearRampToValueAtTime(0, at + dur);
+    },
+    tone(freq, at, dur, type = 'sine', vol = .2) {
       const c = this.ctx; if (!c) return;
       const o = c.createOscillator(), g = c.createGain();
       o.type = type; o.frequency.setValueAtTime(freq, at);
       g.gain.setValueAtTime(0.0001, at);
       g.gain.exponentialRampToValueAtTime(vol, at + .01);
       g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
-      o.connect(g); g.connect(dest || this.out || c.destination);
+      o.connect(g); g.connect(this.out || c.destination);
       o.start(at); o.stop(at + dur + .05);
     },
-    kick(at) {
+    beep(freq, at, dur, vol = .45, type = 'square') {
+      const c = this.ctx, o = c.createOscillator(), g = c.createGain();
+      o.type = type; o.frequency.setValueAtTime(freq, at);
+      this.env(g, at, dur, vol, .004);
+      o.connect(g); g.connect(this.out); o.start(at); o.stop(at + dur + .02);
+    },
+    /* osc ที่ไล่ความถี่ตามจุด [[เวลา, ความถี่], ...] */
+    sweep(points, at, vol, types = ['sawtooth', 'square'], detune = 1.006) {
+      const c = this.ctx, end = points[points.length - 1][0];
+      types.forEach((type, k) => {
+        const o = c.createOscillator(), g = c.createGain(), m = k ? detune : 1;
+        o.type = type;
+        o.frequency.setValueAtTime(points[0][1] * m, at);
+        for (let i = 1; i < points.length; i++) o.frequency.linearRampToValueAtTime(points[i][1] * m, at + points[i][0]);
+        this.env(g, at, end, vol / (k + 1), .02);
+        o.connect(g); g.connect(this.out); o.start(at); o.stop(at + end + .02);
+      });
+    },
+    kick(at, vol = 1) {
       const c = this.ctx, o = c.createOscillator(), g = c.createGain();
       o.type = 'sine'; o.frequency.setValueAtTime(160, at); o.frequency.exponentialRampToValueAtTime(42, at + .18);
-      g.gain.setValueAtTime(1, at); g.gain.exponentialRampToValueAtTime(0.001, at + .32);
+      g.gain.setValueAtTime(vol, at); g.gain.exponentialRampToValueAtTime(0.001, at + .32);
       o.connect(g); g.connect(this.out); o.start(at); o.stop(at + .35);
     },
     snare(at, vol = .8) {
@@ -211,47 +254,136 @@
       s.connect(hp); hp.connect(g); g.connect(this.out); s.start(at); s.stop(at + .2);
       this.tone(190, at, .08, 'triangle', .5);
     },
-    stab(notes, at, dur = .22, vol = .32) { notes.forEach(f => { this.tone(f, at, dur, 'sawtooth', vol); this.tone(f * 1.006, at, dur, 'square', vol * .5); }); },
-
-    /* มาร์ชทหารสังเคราะห์ (แต่งขึ้นเอง) + ไซเรน — ใช้เมื่อไม่มีไฟล์ assets/alarm.mp3 */
-    marchBar() {
-      const t = this.ctx.currentTime + .03, q = 60 / 132; // 132 BPM, 4/4
-      const Dm = [146.8, 174.6, 220], Bb = [116.5, 146.8, 174.6], C = [130.8, 164.8, 196], A = [110, 138.6, 164.8];
-      for (let i = 0; i < 4; i++) this.kick(t + i * q);
-      this.kick(t + 3.5 * q);
-      this.snare(t + q); this.snare(t + 3 * q);
-      [3.25, 3.5, 3.75].forEach(b => this.snare(t + b * q, .5));
-      this.stab(Dm, t); this.stab(Dm, t + .75 * q, .14); this.stab(Bb, t + 1.5 * q);
-      this.stab(C, t + 2 * q); this.stab(A, t + 2.75 * q, .14); this.stab(Dm, t + 3 * q, .4);
-      for (let i = 0; i < 8; i++) this.tone(i % 2 ? 880 : 1174.7, t + i * q / 2, q / 2 - .03, 'square', .22); // ไซเรน
-      return q * 4 * 1000;
+    strike(at, partials, vol, decay = .09) {
+      const c = this.ctx;
+      partials.forEach(([f, a]) => {
+        const o = c.createOscillator(), g = c.createGain();
+        o.type = 'sine'; o.frequency.setValueAtTime(f, at);
+        g.gain.setValueAtTime(vol * a, at); g.gain.exponentialRampToValueAtTime(0.0005, at + decay);
+        o.connect(g); g.connect(this.out); o.start(at); o.stop(at + decay + .02);
+      });
+    },
+    horn(freq, at, dur, vol = .45) {
+      const c = this.ctx, lp = c.createBiquadFilter(), lfo = c.createOscillator(), lg = c.createGain();
+      lp.type = 'lowpass'; lp.frequency.value = 3200; lp.connect(this.out);
+      lfo.frequency.value = 5.5; lg.gain.value = freq * .008; lfo.connect(lg);
+      ['sawtooth', 'square'].forEach((type, k) => {
+        const o = c.createOscillator(), g = c.createGain();
+        o.type = type; o.frequency.setValueAtTime(freq, at); lg.connect(o.frequency);
+        this.env(g, at, dur, vol / (k + 1.5), .03);
+        o.connect(g); g.connect(lp); o.start(at); o.stop(at + dur + .02);
+      });
+      lfo.start(at); lfo.stop(at + dur + .02);
     },
 
-    startAlarm() {
+    /* ---------- patterns: แต่ละอันเล่น 1 รอบเริ่มที่เวลา t แล้วคืนความยาว (วินาที) ---------- */
+    patterns: {
+      airraid(t) { this.sweep([[0, 280], [1.4, 1080], [2.0, 1080], [3.4, 280]], t, .5); return 3.4; },
+      yelp(t) { for (let i = 0; i < 12; i++) this.sweep([[0, 650], [.15, 1550], [.16, 1550]], t + i * .16, .45); return 1.92; },
+      klaxon(t) {
+        for (let k = 0; k < 2; k++) {
+          const a = t + k * .7;
+          this.sweep([[0, 140], [.12, 320], [.5, 320]], a, .55, ['sawtooth', 'square', 'sawtooth'], 1.012);
+          this.sweep([[0, 70], [.12, 160], [.5, 160]], a, .4, ['sawtooth']);
+        }
+        return 1.4;
+      },
+      smoke(t) { for (let i = 0; i < 3; i++) { this.beep(3150, t + i * 1, .5, .55); this.beep(3165, t + i * 1, .5, .25, 'sawtooth'); } return 3.5; },
+      digital(t) {
+        for (let g = 0; g < 2; g++) for (let i = 0; i < 4; i++) this.beep(2900, t + g * .78 + i * .13, .075, .6);
+        return 1.56;
+      },
+      bell(t) {
+        const P = [[2350, 1], [3420, .6], [5020, .4], [1180, .35]];
+        for (let i = 0; i < 40; i++) this.strike(t + i / 22, P, .55);
+        return 2.2;
+      },
+      bugle(t) {
+        const G4 = 392, C5 = 523.25, E5 = 659.25, G5 = 783.99;
+        const tune = [[G4, .18], [G4, .18], [C5, .36], [E5, .36], [G5, .18], [E5, .18], [C5, .36], [G4, .36],
+          [C5, .18], [E5, .18], [G5, .54], [G5, .18], [G5, .72]];
+        let a = t;
+        tune.forEach(([f, d]) => { this.horn(f, a, d - .03, .55); a += d; });
+        return a - t + .35;
+      },
+      march(t) {
+        const q = 60 / 132;
+        const Dm = [146.8, 174.6, 220], Bb = [116.5, 146.8, 174.6], C = [130.8, 164.8, 196], A = [110, 138.6, 164.8];
+        const stab = (n, at, d = .22) => n.forEach(f => { this.tone(f, at, d, 'sawtooth', .32); this.tone(f * 1.006, at, d, 'square', .16); });
+        for (let i = 0; i < 4; i++) this.kick(t + i * q);
+        this.kick(t + 3.5 * q);
+        this.snare(t + q); this.snare(t + 3 * q);
+        [3.25, 3.5, 3.75].forEach(b => this.snare(t + b * q, .5));
+        stab(Dm, t); stab(Dm, t + .75 * q, .14); stab(Bb, t + 1.5 * q);
+        stab(C, t + 2 * q); stab(A, t + 2.75 * q, .14); stab(Dm, t + 3 * q, .4);
+        for (let i = 0; i < 8; i++) this.tone(i % 2 ? 880 : 1174.7, t + i * q / 2, q / 2 - .03, 'square', .22);
+        return q * 4;
+      },
+      mega(t) {
+        for (let i = 0; i < 8; i++) this.sweep([[0, 700], [.15, 1600], [.16, 1600]], t + i * .16, .35);
+        this.sweep([[0, 140], [.12, 320], [.55, 320]], t + 1.35, .5, ['sawtooth', 'square', 'sawtooth'], 1.012);
+        this.sweep([[0, 140], [.12, 320], [.55, 320]], t + 2.05, .5, ['sawtooth', 'square', 'sawtooth'], 1.012);
+        for (let i = 0; i < 6; i++) this.kick(t + i * .45, 1);
+        for (let i = 0; i < 12; i++) this.beep(3000, t + i * .23, .08, .35);
+        return 2.7;
+      }
+    },
+
+    /* ---------- playback ---------- */
+    play(id) {
       this.unlock();
       if (!this.ctx) return;
-      if (!this.timer && !this.src) {
-        if (this.ctx.state === 'suspended') this.ctx.resume();
-        if (this.fileBuf) {
-          const s = this.ctx.createBufferSource();
-          s.buffer = this.fileBuf; s.loop = true; s.connect(this.out); s.start();
-          this.src = s;
-          this.timer = setInterval(() => { if (this.ctx.state === 'suspended') this.ctx.resume(); }, 1000);
-        } else {
-          const ms = this.marchBar();
-          this.timer = setInterval(() => { if (this.ctx.state === 'suspended') this.ctx.resume(); this.marchBar(); }, ms);
-        }
+      if (this.ctx.state === 'suspended') this.ctx.resume();
+      this.playing = id;
+      if (id === 'hellmarch' && this.fileBuf) {
+        const s = this.ctx.createBufferSource();
+        s.buffer = this.fileBuf; s.loop = true; s.connect(this.out); s.start();
+        this.src = s;
+        this.timer = setInterval(() => { if (this.ctx.state === 'suspended') this.ctx.resume(); }, 1000);
+        return;
       }
+      // Hell March ยังโหลดไม่เสร็จ/ไม่มีไฟล์ → ใช้มาร์ชสังเคราะห์ระหว่างรอ
+      const fn = this.patterns[id] || this.patterns.march;
+      this.nextAt = this.ctx.currentTime + .05;
+      const tick = () => {
+        if (this.ctx.state === 'suspended') this.ctx.resume();
+        if (this.nextAt < this.ctx.currentTime) this.nextAt = this.ctx.currentTime + .05;
+        while (this.nextAt < this.ctx.currentTime + 1.5) this.nextAt += fn.call(this, this.nextAt);
+      };
+      tick();
+      this.timer = setInterval(tick, 250);
+    },
+
+    startAlarm(id) {
+      if (!this.timer && !this.src) this.play(id || this.selected);
       if (!this.vibTimer && 'vibrate' in navigator) {
         const v = () => { try { navigator.vibrate([900, 200, 900, 200, 900]); } catch (_) {} };
         v(); this.vibTimer = setInterval(v, 3000);
       }
     },
+
+    /* ฟังตัวอย่าง 4 วินาที (ถ้ามีการเรียกค้างอยู่ จะกลับไปเล่นเสียงเตือนต่อ) */
+    preview(id, onEnd) {
+      clearTimeout(this.pvTimer);
+      this.stopLoops();
+      this.play(id);
+      this.pvTimer = setTimeout(() => { this.stopLoops(); onEnd && onEnd(); }, 4000);
+    },
+
     stopLoops() {
-      clearInterval(this.timer); this.timer = null;
+      clearInterval(this.timer); this.timer = null; this.playing = null;
       if (this.src) { try { this.src.stop(); } catch (_) {} this.src.disconnect(); this.src = null; }
+      if (this.out) { // ตัดเสียงที่ตั้งเวลาไว้ล่วงหน้าทันที
+        const c = this.ctx, g = this.boost.gain, v = g.value;
+        g.cancelScheduledValues(c.currentTime); g.setValueAtTime(0, c.currentTime);
+        const old = this.boost;
+        this.buildChain();
+        setTimeout(() => { try { old.disconnect(); } catch (_) {} }, 1600);
+        this.boost.gain.value = v;
+      }
     },
     stopAlarm() {
+      clearTimeout(this.pvTimer);
       this.stopLoops();
       clearInterval(this.vibTimer); this.vibTimer = null;
       try { navigator.vibrate && navigator.vibrate(0); } catch (_) {}
@@ -762,6 +894,28 @@
       }
     },
 
+    renderTones() {
+      const sel = Sound.selected;
+      setHTML($('#toneGrid'), TONES.map(t => `
+        <button type="button" class="tone ${t.id === sel ? 'sel' : ''}" data-tone="${t.id}">
+          <span class="tone-ic">${t.icon}</span>
+          <span class="tone-txt"><span class="tone-name">${esc(t.name)}</span><span class="tone-desc">${esc(t.desc)}</span></span>
+          <span class="tone-check">${t.id === sel ? '✓' : '▶'}</span>
+        </button>`).join(''));
+      const cur = TONES.find(t => t.id === sel);
+      $('#toneCurrent').textContent = cur ? cur.name : '';
+    },
+
+    previewTone(id) {
+      Sound.unlock();
+      $('#testAlarmBtn').disabled = true;
+      Sound.preview(id, () => {
+        $('#testAlarmBtn').disabled = false;
+        if (this.queue.length) Sound.startAlarm(); // มีการเรียกค้างอยู่ → เล่นเสียงเตือนต่อ
+        this.renderChecks();
+      });
+    },
+
     renderChecks() {
       const set = (id, ok, text) => { const el = $(id); el.classList.toggle('ok', ok === true); el.classList.toggle('bad', ok === false); $('em', el).textContent = text; };
       set('#ckSound', Sound.ready ? true : false, Sound.ready ? 'พร้อม' : 'แตะเพื่อเปิด');
@@ -801,15 +955,14 @@
       $('#ackBtn').addEventListener('click', () => { Sound.unlock(); this.ack(); });
       $('#editProfileBtn').addEventListener('click', () => this.showReg(true));
       $('#enableNotifBtn').addEventListener('click', async () => { await Notify.request(); this.renderChecks(); });
-      $('#testAlarmBtn').addEventListener('click', async () => {
-        Sound.unlock();
-        Sound.startAlarm();
-        $('#testAlarmBtn').disabled = true;
-        await sleep(4000);
-        if (!this.queue.length) Sound.stopAlarm();
-        $('#testAlarmBtn').disabled = false;
-        this.renderChecks();
+      $('#testAlarmBtn').addEventListener('click', () => this.previewTone(Sound.selected));
+      $('#toneGrid').addEventListener('click', e => {
+        const b = e.target.closest('[data-tone]'); if (!b) return;
+        Sound.selected = b.dataset.tone;
+        this.renderTones();
+        this.previewTone(b.dataset.tone);
       });
+      this.renderTones();
     }
   };
 
