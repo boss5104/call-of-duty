@@ -129,7 +129,8 @@ const ROUTES = {
     const me = table_(SHEET.STAFF).find(r => r.StaffID === id);
     if (!me) return { registered: false, calls: [] };
     touch_(id);
-    return { registered: true, calls: pendingFor_(me).map(callOut_) };
+    const repair = !!CacheService.getScriptCache().get('repair_' + id);
+    return { registered: true, repair: repair, calls: pendingFor_(me).map(callOut_) };
   },
 
   ack: (p) => ackCall_(clean_(p.staffId), clean_(p.callId)),
@@ -197,14 +198,27 @@ const ROUTES = {
     const staffRows = table_(SHEET.STAFF);
     const seen = CacheService.getScriptCache().getAll(staffRows.map(r => 'seen_' + r.StaffID));
     const now = Date.now();
-    const subs = {};
-    table_(SHEET.PUSH).forEach(s => { subs[s.StaffID] = (subs[s.StaffID] || 0) + 1; });
+    const subs = {}, devs = {};
+    const pushRows = table_(SHEET.PUSH);
+    const hs = pushRows.map(r => hash_(r.Endpoint));
+    const keys = staffRows.map(r => 'repair_' + r.StaffID);
+    hs.forEach(h => keys.push('psend_' + h, 'precv_' + h));
+    const cv = keys.length ? CacheService.getScriptCache().getAll(keys) : {};
+    const js = v => { try { return v ? JSON.parse(v) : null; } catch (_) { return null; } };
+    pushRows.forEach((s, i) => {
+      subs[s.StaffID] = (subs[s.StaffID] || 0) + 1;
+      (devs[s.StaffID] = devs[s.StaffID] || []).push({
+        device: s.Device, host: (String(s.Endpoint).match(/^https:\/\/([^/]+)/) || [])[1] || '',
+        sent: js(cv['psend_' + hs[i]]), recv: js(cv['precv_' + hs[i]])
+      });
+    });
     const staff = staffRows.map(r => {
       const last = Number(seen['seen_' + r.StaffID]) || ms_(r.LastSeen);
       return {
         staffId: r.StaffID, firstName: r.FirstName, lastName: r.LastName, nickname: r.Nickname,
         team: r.Team, lineId: r.LineID, lastSeen: last, online: now - last < ONLINE_WINDOW_MS,
-        push: subs[r.StaffID] || 0 // จำนวนเครื่องที่รับแจ้งเตือนตอนปิดแอปได้
+        push: subs[r.StaffID] || 0, // จำนวนเครื่องที่รับแจ้งเตือนตอนปิดแอปได้
+        devices: devs[r.StaffID] || [], repair: !!cv['repair_' + r.StaffID]
       };
     });
     const resp = table_(SHEET.RESP);
@@ -217,14 +231,33 @@ const ROUTES = {
       return o;
     });
     let pushLast = null;
-    try { pushLast = JSON.parse(PropertiesService.getScriptProperties().getProperty('PUSH_LAST') || 'null'); } catch (_) {}
+    try { pushLast = JSON.parse(CacheService.getScriptCache().get('PUSH_LAST') || 'null'); } catch (_) {}
     return { staff: staff, calls: calls, serverTime: now, pushLast: pushLast };
   },
 
   /* ----- Push ----- */
   pushKey: () => ({ key: vapid_().pub }),
 
-  pushSub: (p) => savePushSub_(clean_(p.staffId), p.sub, p.device),
+  pushSub: (p) => savePushSub_(clean_(p.staffId), p.sub, p.device, String(p.replace) === 'true'),
+
+  // service worker รายงานว่าได้รับ push แล้ว/แสดงแจ้งเตือนได้หรือไม่ (ใช้แสดงสถานะรายเครื่องให้ผู้บังคับบัญชา)
+  swSeen: (p) => {
+    const ep = String(p.endpoint || '').trim();
+    if (!ep || !table_(SHEET.PUSH).some(r => r.Endpoint === ep)) return {};
+    CacheService.getScriptCache().put('precv_' + hash_(ep), JSON.stringify({
+      at: Date.now(), kind: clean_(p.kind).slice(0, 20), perm: clean_(p.perm).slice(0, 20), err: clean_(p.err).slice(0, 160)
+    }), 21600);
+    return {};
+  },
+
+  // ผู้บังคับบัญชาสั่งซ่อมการแจ้งเตือนของคนนี้ → เครื่องจะสมัครรับแจ้งเตือนใหม่เมื่อแอปทำงาน
+  repairPush: (p) => {
+    requireCommander_(p);
+    const id = clean_(p.staffId);
+    if (!table_(SHEET.STAFF).some(r => r.StaffID === id)) throw new Error('ไม่พบรายชื่อ');
+    CacheService.getScriptCache().put('repair_' + id, '1', 21600);
+    return {};
+  },
 
   // service worker สมัคร push ใหม่เอง (เบราว์เซอร์เปลี่ยนช่องทาง) → ผูกกับคนเดิมจาก endpoint เก่า
   swResub: (p) => {
@@ -295,7 +328,7 @@ function validSub_(sub) {
 }
 
 /** บันทึก/อัปเดตเครื่องที่รับ push (หนึ่งคนมีได้หลายเครื่อง) */
-function savePushSub_(id, sub, device) {
+function savePushSub_(id, sub, device, replace) {
   sub = validSub_(sub);
   if (!sub) throw new Error('ข้อมูลการแจ้งเตือนไม่ถูกต้อง');
   const ep = String(sub.endpoint).trim();
@@ -307,9 +340,13 @@ function savePushSub_(id, sub, device) {
     const keys = (sub && sub.keys) || {};
     const row = [ep, id, new Date(), clean_(device).slice(0, 120), String(keys.p256dh || '').slice(0, 200), String(keys.auth || '').slice(0, 100)];
     if (i >= 0) sh.getRange(i + 2, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
+    if (replace) { // ซ่อม: ลบช่องทางเก่าของคนนี้ทิ้ง เหลือเฉพาะอันใหม่
+      for (let j = rows.length - 1; j >= 0; j--) if (rows[j].StaffID === id && rows[j].Endpoint !== ep) sh.deleteRow(j + 2);
+    }
     bust_(SHEET.PUSH);
     return {};
   });
+  if (replace) CacheService.getScriptCache().remove('repair_' + id);
   // เครื่องเพิ่งเปิดรับแจ้งเตือน และมีการเรียกค้างอยู่ → เริ่มตัวส่งซ้ำ (การเรียกที่ส่งก่อนเครื่องลงทะเบียนจะไม่ตกหล่น)
   try {
     const me = table_(SHEET.STAFF).find(r => r.StaffID === id);
@@ -408,7 +445,12 @@ function sendPush_(items) {
   if (gone.length) removeSubs_(gone);
   sendPush_.errors = errors;
   try {
-    PropertiesService.getScriptProperties().setProperty('PUSH_LAST', JSON.stringify({ at: Date.now(), sent: items.length, ok: ok, errors: errors }));
+    const now = Date.now(), put = { PUSH_LAST: JSON.stringify({ at: now, sent: items.length, ok: ok, errors: errors }) };
+    items.forEach((it, i) => {
+      const code = res[i] ? res[i].getResponseCode() : 0;
+      put['psend_' + hash_(it.sub.Endpoint)] = JSON.stringify({ at: now, code: code });
+    });
+    CacheService.getScriptCache().putAll(put, 21600);
   } catch (_) {}
   return ok;
 }

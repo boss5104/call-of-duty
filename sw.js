@@ -1,5 +1,5 @@
 /* Call Of Duty Modern Warfare service worker: ติดตั้งเป็นแอป + แจ้งเตือนแบบ push (เด้งขึ้นจอแม้ปิดแอป) */
-const CACHE = 'duty-call-v11';
+const CACHE = 'duty-call-v12';
 const CFG_CACHE = 'dc-cfg';          // ที่เก็บ API URL ที่หน้าเว็บส่งมาให้ (ห้ามลบตอนอัปเดต)
 const CFG_KEY = './__dc_cfg';
 const SHELL = ['./', './index.html', './assets/app.css', './assets/app.js', './config.js',
@@ -130,7 +130,15 @@ async function onPush(e) {
   for (const c of calls) await callNotification(c);
 }
 
-self.addEventListener('push', e => { e.waitUntil(onPush(e)); });
+// รายงานกลับเซิร์ฟเวอร์ว่าเครื่องนี้ได้รับแจ้งเตือนแล้ว (ผู้บังคับบัญชาเห็นสถานะรายเครื่อง)
+function seen(kind, err) {
+  let perm = '';
+  try { perm = self.Notification ? self.Notification.permission : ''; } catch (_) {}
+  return api('swSeen', { kind: kind, perm: perm, err: err || '' }).catch(() => {});
+}
+self.addEventListener('push', e => {
+  e.waitUntil(onPush(e).then(() => seen('shown'), err => seen('error', String(err && err.message || err))));
+});
 
 // เบราว์เซอร์เปลี่ยนช่องทาง push เอง → สมัครใหม่และแจ้งเซิร์ฟเวอร์ทันที (ไม่ต้องรอให้เปิดแอป)
 self.addEventListener('pushsubscriptionchange', e => {
