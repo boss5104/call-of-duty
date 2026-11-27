@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&family=Noto+Serif+Thai:wght@500;600;700&family=Cinzel:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="assets/app.css?v=2026.11.27-1433">
+  <link rel="stylesheet" href="assets/app.css?v=2026.11.27-1452">
 </head>
 <body>
   <div class="bg-orb orb-1"></div><div class="bg-orb orb-2"></div><div class="bg-grid"></div>
@@ -227,14 +227,30 @@
           <div class="check" id="ckNotif"><i></i><span>การแจ้งเตือนระบบ</span><em>–</em></div>
           <div class="check" id="ckWake"><i></i><span>ป้องกันหน้าจอดับ</span><em>–</em></div>
           <div class="check" id="ckConn"><i></i><span>การเชื่อมต่อ</span><em>–</em></div>
+          <div class="check wide" id="ckPush" role="button" tabindex="0"><i></i><span>แจ้งเตือนเด้งขึ้นจอแม้ปิดแอป</span><em>–</em></div>
         </div>
 
         <div class="btn-stack">
           <button class="btn-gold block" type="button" id="enableNotifBtn" hidden>อนุญาตการแจ้งเตือน</button>
           <button class="btn-outline block" type="button" id="testAlarmBtn">ทดสอบเสียงเตือน</button>
+          <button class="btn-outline block" type="button" id="testPushBtn">ทดสอบแจ้งเตือนตอนปิดแอป</button>
           <button class="btn-gold block" type="button" data-install id="staffInstallBtn" hidden>เพิ่มไปยังหน้าจอโฮม</button>
           <button class="btn-ghost block" type="button" id="editProfileBtn">แก้ไขข้อมูล</button>
         </div>
+
+        <details class="loud-tips">
+          <summary>📢 ตั้งค่าให้แจ้งเตือนดังสุด + เด้งขึ้นจอ (ทำครั้งเดียว)</summary>
+          <p><b>Android</b> (ติดตั้งแอปลงหน้าจอโฮมแล้ว)</p>
+          <ol>
+            <li>กดค้างที่ไอคอนแอป <b>Call Of Duty</b> → <b>ข้อมูลแอป (ⓘ)</b> → <b>การแจ้งเตือน</b> → เปิดทุกช่อง</li>
+            <li>แตะหมวดการแจ้งเตือน → <b>เสียง</b> → เลือกเสียงที่ดังที่สุด (เช่น เสียงนาฬิกาปลุก/ไซเรน)</li>
+            <li>เปิด <b>แสดงป๊อปอัปบนหน้าจอ</b> · <b>แสดงบนหน้าจอล็อก</b> · <b>ข้ามโหมดห้ามรบกวน</b></li>
+            <li>ตั้งค่า → แบตเตอรี่ → แอป Call Of Duty / Chrome → <b>ไม่จำกัด</b> (ไม่ให้ระบบปิดแอปเพื่อประหยัดแบต)</li>
+            <li>ปรับ <b>เสียงแจ้งเตือน</b> ของเครื่องให้สุด</li>
+          </ol>
+          <p>ถ้าเปิดผ่าน Chrome (ไม่ได้ติดตั้ง): Chrome → ⋮ → การตั้งค่า → การแจ้งเตือน → เลือกเว็บนี้ → ตั้งเสียง/ป๊อปอัปแบบเดียวกัน</p>
+          <p><b>iPhone</b>: ต้องเพิ่มลงหน้าจอโฮมก่อน (iOS 16.4+) แล้วเปิดแอปจากไอคอน · ตั้งค่า → การแจ้งเตือน → Call Of Duty → เปิด <b>เสียง</b>, <b>แบนเนอร์แบบคงอยู่ (Persistent)</b> · ปิดสวิตช์ปิดเสียงข้างเครื่อง</p>
+        </details>
       </div>
     </section>
     <p class="app-version" id="appVersion"></p>
@@ -304,7 +320,7 @@
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
 
-  <script src="config.js?v=2026.11.27-1433"></script>
-  <script src="assets/app.js?v=2026.11.27-1433"></script>
+  <script src="config.js?v=2026.11.27-1452"></script>
+  <script src="assets/app.js?v=2026.11.27-1452"></script>
 </body>
 </html>

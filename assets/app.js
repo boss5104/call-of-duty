@@ -2,8 +2,8 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.11.27-1433'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
-  const APP_CHANGES = 'ผู้บังคับบัญชาเลือกเสียงเตือนได้ 10 แบบตอนส่งการเรียก · จดจำรหัส · อัปเดตอัตโนมัติ';
+  const APP_VERSION = '2026.11.27-1452'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
+  const APP_CHANGES = 'แจ้งเตือนเด้งขึ้นจอแม้ปิดแอป/ล็อกจอ ดังซ้ำทุก 20 วินาทีจนกว่าจะกดตอบรับ';
   const CFG = Object.assign({ API_URL: '', TEAMS: [], STAFF_POLL_MS: 4000, COMMANDER_POLL_MS: 3000 }, window.DUTY_CONFIG || {});
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -417,6 +417,20 @@
   let swReg = null;
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').then(r => { swReg = r; }).catch(() => {});
+    // ข้อความจาก service worker: ได้รับ push / กดรับทราบจากแจ้งเตือนแล้ว
+    navigator.serviceWorker.addEventListener('message', e => {
+      const m = e.data || {};
+      if (m.type === 'acked' && m.callId) {
+        Staff.acked.add(m.callId);
+        Staff.queue = Staff.queue.filter(c => c.callId !== m.callId);
+        if (Staff.queue.length) { Staff.showing = null; Staff.ring(); } else Staff.hideAlarm();
+      }
+      if (Staff.active) Staff.poll();
+    });
+  }
+  // ให้ service worker รู้ว่าเซิร์ฟเวอร์อยู่ที่ไหน (ใช้ตอนได้รับ push ขณะปิดแอป)
+  if (window.caches && LIVE) {
+    caches.open('dc-cfg').then(c => c.put('./__dc_cfg', new Response(JSON.stringify({ api: API_URL }), { headers: { 'Content-Type': 'application/json' } }))).catch(() => {});
   }
 
   const Notify = {
@@ -429,7 +443,11 @@
     },
     async show(title, body, tag, urgent) {
       if (!this.granted) return;
-      const opt = { body, tag, renotify: true, requireInteraction: !!urgent, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', vibrate: urgent ? [700, 250, 700, 250, 700, 250, 700] : [200] };
+      const opt = { body, tag, renotify: true, requireInteraction: !!urgent, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', vibrate: urgent ? [1000, 200, 1000, 200, 1000, 200, 1000, 200, 1000] : [200] };
+      if (urgent && /^call-/.test(tag)) {
+        opt.data = { callId: tag.slice(5), message: title.replace(/^🚨\s*/, ''), detail: body };
+        opt.actions = [{ action: 'ack', title: '✅ รับทราบ / ตอบรับ' }, { action: 'open', title: '🔊 เปิดแอป' }];
+      }
       try {
         const reg = swReg || (navigator.serviceWorker && await navigator.serviceWorker.getRegistration());
         if (reg) return reg.showNotification(title, opt);
@@ -443,6 +461,62 @@
       } catch (_) {}
     }
   };
+
+  /* ---------- Web Push: เด้งแจ้งเตือนขึ้นจอแม้ปิดแอป/ล็อกหน้าจอ ---------- */
+  const b64uToBytes = s => {
+    const b = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4));
+    return Uint8Array.from(b, c => c.charCodeAt(0));
+  };
+  const IOS = /iPad|iPhone|iPod/.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const Push = {
+    state: null, // null = ยังไม่ตรวจ | 'on' | 'off' | 'nosupport' | 'needinstall' | 'error'
+    get supported() { return LIVE && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && location.protocol === 'https:'; },
+    async ensure(force) {
+      const p = Staff.profile();
+      if (!LIVE) { this.state = 'demo'; return; }
+      if (!this.supported) { this.state = IOS ? 'needinstall' : 'nosupport'; return; }
+      if (!Notify.granted) { this.state = 'off'; return; }
+      if (!p || !p.staffId || (this.busy && !force)) return;
+      this.busy = true;
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        const { key } = await API.call('pushKey');
+        let sub = await reg.pushManager.getSubscription();
+        if (sub && store.get('dc_push_key') !== key) { try { await sub.unsubscribe(); } catch (_) {} sub = null; }
+        if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(key) });
+        store.set('dc_push_key', key);
+        await API.call('pushSub', { staffId: p.staffId, sub: sub.toJSON(), device: deviceName() });
+        this.state = 'on';
+      } catch (e) {
+        this.state = 'error'; this.err = e.message;
+      } finally { this.busy = false; Staff.renderChecks(); }
+    },
+    async test() {
+      const p = Staff.profile();
+      if (this.state !== 'on') { await Notify.request(); await this.ensure(true); }
+      if (this.state !== 'on') return toast('err', 'ยังเปิดแจ้งเตือนเมื่อปิดแอปไม่ได้', this.label()[1]);
+      toast('info', 'ปิดแอปหรือล็อกหน้าจอภายใน 10 วินาที', 'จะมีแจ้งเตือนทดสอบเด้งขึ้นมาบนหน้าจอ', 10000);
+      try { await API.call('pushTest', { staffId: p.staffId, delay: 10 }); }
+      catch (e) { toast('err', 'ส่งแจ้งเตือนทดสอบไม่สำเร็จ', e.message); }
+    },
+    label() {
+      switch (this.state) {
+        case 'on': return [true, 'เปิดแล้ว'];
+        case 'off': return [Notification.permission === 'denied' ? false : null, Notification.permission === 'denied' ? 'ถูกปิดกั้น' : 'ยังไม่อนุญาต'];
+        case 'needinstall': return [false, 'ต้องเพิ่มลงหน้าจอโฮมก่อน'];
+        case 'nosupport': return [false, 'เบราว์เซอร์ไม่รองรับ'];
+        case 'demo': return [null, 'ต้องเชื่อม Google Sheet'];
+        case 'error': return [false, 'ผิดพลาด แตะเพื่อลองใหม่'];
+        default: return [null, 'กำลังตรวจ'];
+      }
+    }
+  };
+  function deviceName() {
+    const m = /Android[^;)]*;\s*([^;)]+?)(?:\sBuild|\))/.exec(UA);
+    if (m) return 'Android ' + m[1];
+    if (IOS) return 'iPhone/iPad';
+    return (navigator.platform || 'เครื่องคอมพิวเตอร์');
+  }
 
   const Wake = {
     lock: null, want: false,
@@ -859,6 +933,7 @@
     async activate() {
       Sound.unlock();
       await Notify.request();
+      Push.ensure();
       await Wake.on();
       $('#gate').hidden = true;
       this.renderChecks();
@@ -869,6 +944,7 @@
       if (this.active) return;
       this.active = true;
       this.poll();
+      Push.ensure();
       this.timer = setInterval(() => this.poll(), CFG.STAFF_POLL_MS);
       this.renderChecks();
     },
@@ -975,6 +1051,8 @@
       set('#ckWake', 'wakeLock' in navigator ? !!Wake.lock : null, !('wakeLock' in navigator) ? 'ไม่รองรับ' : Wake.lock ? 'เปิดอยู่' : 'ปิด');
       set('#ckConn', this.online === null ? null : this.online, this.online === null ? 'กำลังเชื่อมต่อ' : this.online ? (LIVE ? 'ออนไลน์' : 'โหมดทดลอง') : 'ขาดการเชื่อมต่อ');
       $('#enableNotifBtn').hidden = !(Notify.supported && Notification.permission === 'default');
+      const [pok, ptext] = Push.label();
+      set('#ckPush', pok, ptext);
     },
 
     init() {
@@ -1005,7 +1083,9 @@
       $('#gateBtn').addEventListener('click', () => this.activate());
       $('#ackBtn').addEventListener('click', () => { Sound.unlock(); this.ack(); });
       $('#editProfileBtn').addEventListener('click', () => this.showReg(true));
-      $('#enableNotifBtn').addEventListener('click', async () => { await Notify.request(); this.renderChecks(); });
+      $('#enableNotifBtn').addEventListener('click', async () => { await Notify.request(); await Push.ensure(true); this.renderChecks(); });
+      $('#ckPush').addEventListener('click', async () => { if (Push.state !== 'on') { await Notify.request(); await Push.ensure(true); } });
+      $('#testPushBtn').addEventListener('click', () => Push.test());
       $('#testAlarmBtn').addEventListener('click', () => this.previewTone(Sound.selected));
     }
   };
@@ -1063,7 +1143,7 @@
       try {
         const reg = swReg || (navigator.serviceWorker && await navigator.serviceWorker.getRegistration());
         if (reg) await reg.update();
-        if (window.caches) await Promise.all((await caches.keys()).map(k => caches.delete(k)));
+        if (window.caches) await Promise.all((await caches.keys()).filter(k => k !== 'dc-cfg').map(k => caches.delete(k)));
       } catch (_) {}
       setTimeout(() => location.reload(), 700);
     },
