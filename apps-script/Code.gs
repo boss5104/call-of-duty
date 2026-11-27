@@ -22,12 +22,25 @@ const REMIND_FOR_MIN   = 30;  // ส่งซ้ำนานสุดกี่�
 const PUSH_TTL_SEC     = 1800; // ถ้าเครื่องไม่มีเน็ต บริการ push จะเก็บไว้ส่งให้เมื่อกลับมาออนไลน์ภายในกี่วินาที
 const REQUIRE_PUSH     = true; // ผู้ลงทะเบียนใหม่ต้องเปิดรับแจ้งเตือน (ปิดแอปก็ได้รับ) จึงจะลงทะเบียนได้
 
+/* ----- โทรเข้าเบอร์มือถืออัตโนมัติ (Twilio) — ถึงได้แม้ไม่มีเน็ต/ไม่ได้เปิดแอป -----
+ * ใส่รหัสใน Apps Script: ⚙ การตั้งค่าโปรเจกต์ → พร็อพเพอร์ตีสคริปต์ (ห้ามใส่ในโค้ด เพราะ repo เป็นสาธารณะ)
+ *   TWILIO_SID   = Account SID (ขึ้นต้นด้วย AC…)
+ *   TWILIO_TOKEN = Auth Token
+ *   TWILIO_FROM  = เบอร์ Twilio ที่ใช้โทรออก เช่น +15551234567
+ */
+const CALL_FIRST_AFTER_SEC = 30;  // คนที่เปิดรับ push แล้ว: ถ้าไม่ตอบรับภายในกี่วินาทีจึงเริ่มโทร (คนที่ไม่มี push โทรทันที)
+const CALL_EVERY_SEC       = 90;  // โทรซ้ำทุก ๆ กี่วินาที จนกว่าจะตอบรับ
+const CALL_RING_SEC        = 45;  // ให้เสียงเรียกเข้าดังนานกี่วินาทีต่อครั้ง
+const CALL_FOR_MIN         = 15;  // โทรซ้ำนานสุดกี่นาทีต่อการเรียกหนึ่งครั้ง
+const SEND_SMS             = true; // ส่ง SMS 1 ครั้งพร้อมการโทรครั้งแรก
+const THAI_VOICE           = 'Google.th-TH-Standard-A';
+
 // คอลัมน์ที่เป็นข้อความ (กันเลข 0 นำหน้าในไอดีไลน์/ชื่อหาย) — นับจาก 1
-const TEXT_COLS = { Staff: [1, 3, 4, 5, 6, 7], Calls: [1, 3, 4, 5, 6, 7], Responses: [1, 2, 3, 4, 5, 6], Push: [1, 2, 4, 5, 6] };
+const TEXT_COLS = { Staff: [1, 3, 4, 5, 6, 7, 9], Calls: [1, 3, 4, 5, 6, 7], Responses: [1, 2, 3, 4, 5, 6], Push: [1, 2, 4, 5, 6] };
 
 const SHEET = { STAFF: 'Staff', CALLS: 'Calls', RESP: 'Responses', PUSH: 'Push' };
 const HEADERS = {
-  Staff:     ['StaffID', 'RegisteredAt', 'FirstName', 'LastName', 'Nickname', 'Team', 'LineID', 'LastSeen'],
+  Staff:     ['StaffID', 'RegisteredAt', 'FirstName', 'LastName', 'Nickname', 'Team', 'LineID', 'LastSeen', 'Phone'],
   Calls:     ['CallID', 'CreatedAt', 'Message', 'Detail', 'Priority', 'Target', 'Status', 'ClosedAt'],
   Responses: ['CallID', 'StaffID', 'FullName', 'Nickname', 'Team', 'LineID', 'RespondedAt'],
   Push:      ['Endpoint', 'StaffID', 'UpdatedAt', 'Device', 'P256dh', 'Auth']
@@ -35,7 +48,11 @@ const HEADERS = {
 
 /* ---------------- Entry points ---------------- */
 
-function doGet(e) { return handle_(e && e.parameter ? e.parameter : {}); }
+function doGet(e) {
+  const p = e && e.parameter ? e.parameter : {};
+  if (p.action === 'twilioAck') return twilioAck_(p); // Twilio เรียกกลับเมื่อผู้รับสายกดปุ่ม
+  return handle_(p);
+}
 
 function doPost(e) {
   let p = {};
@@ -66,6 +83,8 @@ const ROUTES = {
       team: clean_(p.team), lineId: clean_(p.lineId)
     };
     Object.keys(f).forEach(k => { if (!f[k]) throw new Error('กรุณากรอกข้อมูลให้ครบทุกช่อง'); });
+    const phone = phone_(p.phone);
+    if (!phone) throw new Error('กรุณากรอกเบอร์โทรศัพท์มือถือให้ถูกต้อง (เช่น 0812345678)');
     const known = clean_(p.staffId) && table_(SHEET.STAFF).some(r => r.StaffID === clean_(p.staffId));
     const sub = validSub_(p.sub);
     if (REQUIRE_PUSH && !known && !sub) throw new Error('ต้องกดอนุญาตการแจ้งเตือนก่อน จึงจะลงทะเบียนได้');
@@ -76,10 +95,10 @@ const ROUTES = {
       const idx = id ? rows.findIndex(r => r.StaffID === id) : -1;
       const now = new Date();
       if (idx >= 0) {
-        sh.getRange(idx + 2, 3, 1, 6).setValues([[f.firstName, f.lastName, f.nickname, f.team, f.lineId, now]]);
+        sh.getRange(idx + 2, 3, 1, 7).setValues([[f.firstName, f.lastName, f.nickname, f.team, f.lineId, now, phone]]);
       } else {
         id = 'S' + Date.now().toString(36).toUpperCase() + Math.floor(Math.random() * 1296).toString(36).toUpperCase();
-        sh.appendRow([id, now, f.firstName, f.lastName, f.nickname, f.team, f.lineId, now]);
+        sh.appendRow([id, now, f.firstName, f.lastName, f.nickname, f.team, f.lineId, now, phone]);
       }
       bust_(SHEET.STAFF);
       return { staffId: id };
@@ -105,12 +124,38 @@ const ROUTES = {
     return {};
   },
 
+  // ลบรายชื่อทุกคน → ทุกเครื่องต้องลงทะเบียนใหม่ (ต้องอนุญาตแจ้งเตือน + ใส่เบอร์โทร) · ประวัติการตอบรับยังอยู่
+  removeAllStaff: (p) => {
+    requireCommander_(p);
+    if (String(p.confirm || '') !== 'DELETE') throw new Error('ยกเลิก');
+    let n = 0;
+    withLock_(() => {
+      [SHEET.STAFF, SHEET.PUSH].forEach(name => {
+        const sh = sheet_(name), last = sh.getLastRow();
+        if (last > 1) { if (name === SHEET.STAFF) n = last - 1; sh.getRange(2, 1, last - 1, sh.getMaxColumns()).clearContent(); }
+        bust_(name);
+      });
+    });
+    return { removed: n };
+  },
+
+  // ผู้บังคับบัญชาทดสอบโทรหาคนนี้ทันที
+  testCall: (p) => {
+    requireCommander_(p);
+    if (!twilio_()) throw new Error('ยังไม่ได้ตั้งค่า Twilio (TWILIO_SID / TWILIO_TOKEN / TWILIO_FROM ในพร็อพเพอร์ตีสคริปต์)');
+    const me = table_(SHEET.STAFF).find(r => r.StaffID === clean_(p.staffId));
+    if (!me) throw new Error('ไม่พบรายชื่อ');
+    if (!phone_(me.Phone)) throw new Error('คนนี้ยังไม่มีเบอร์โทร');
+    voiceCall_(me, null);
+    return {};
+  },
+
   staffPoll: (p) => {
     const id = clean_(p.staffId);
     const me = table_(SHEET.STAFF).find(r => r.StaffID === id);
     if (!me) return { registered: false, calls: [] };
     touch_(id);
-    return { registered: true, calls: pendingFor_(me).map(callOut_) };
+    return { registered: true, needPhone: !phone_(me.Phone), calls: pendingFor_(me).map(callOut_) };
   },
 
   ack: (p) => ackCall_(clean_(p.staffId), clean_(p.callId)),
@@ -126,9 +171,11 @@ const ROUTES = {
       return { callId: id };
     });
     // เด้งแจ้งเตือนไปทุกเครื่องทันที แล้วตั้งตัวส่งซ้ำทุก ~20 วินาทีจนกว่าจะตอบรับ
-    let pushed = 0;
-    try { pushed = pushPending_(); if (table_(SHEET.PUSH).length) ensureTicker_(); } catch (err) { console.error('push: ' + err); }
-    return { callId: out.callId, pushed: pushed };
+    let pushed = 0, calling = 0;
+    try { pushed = pushPending_(); } catch (err) { console.error('push: ' + err); }
+    try { calling = callPending_(); } catch (err) { console.error('voice: ' + err); }
+    try { if (table_(SHEET.PUSH).length || twilio_()) ensureTicker_(); } catch (err) { console.error('ticker: ' + err); }
+    return { callId: out.callId, pushed: pushed, calling: calling, voice: !!twilio_() };
   },
 
   closeCall: (p) => {
@@ -155,7 +202,8 @@ const ROUTES = {
       return {
         staffId: r.StaffID, firstName: r.FirstName, lastName: r.LastName, nickname: r.Nickname,
         team: r.Team, lineId: r.LineID, lastSeen: last, online: now - last < ONLINE_WINDOW_MS,
-        push: subs[r.StaffID] || 0 // จำนวนเครื่องที่รับแจ้งเตือนตอนปิดแอปได้
+        push: subs[r.StaffID] || 0, // จำนวนเครื่องที่รับแจ้งเตือนตอนปิดแอปได้
+        phone: phone_(r.Phone)
       };
     });
     const resp = table_(SHEET.RESP);
@@ -167,7 +215,7 @@ const ROUTES = {
       }));
       return o;
     });
-    return { staff: staff, calls: calls, serverTime: now };
+    return { staff: staff, calls: calls, serverTime: now, voice: !!twilio_() };
   },
 
   /* ----- Push ----- */
@@ -267,8 +315,10 @@ function pushTick() {
   const start = Date.now();
   for (;;) {
     bust_(SHEET.CALLS); bust_(SHEET.RESP);
-    const n = pushPending_();
-    if (!n) { stopTicker_(); return; }
+    let n = 0, v = 0;
+    try { n = pushPending_(); } catch (err) { console.error('push: ' + err); }
+    try { v = callPending_(); } catch (err) { console.error('voice: ' + err); }
+    if (!n && !v) { stopTicker_(); return; }
     if (Date.now() - start + REPUSH_EVERY_SEC * 1000 > 48000) return; // ต่อในรอบนาทีถัดไป
     Utilities.sleep(REPUSH_EVERY_SEC * 1000);
   }
@@ -734,4 +784,110 @@ function aesBlock_(w, inp) {
     st = st.map((b, i) => b ^ w[r * 16 + i]);
   }
   return st;
+}
+
+/* =====================================================================
+ * โทรอัตโนมัติ + SMS ผ่าน Twilio
+ * ===================================================================== */
+
+/** เบอร์มือถือ → รูปแบบสากล (+66…) หรือ '' ถ้าไม่ถูกต้อง */
+function phone_(v) {
+  let s = String(v == null ? '' : v).replace(/[^\d+]/g, '');
+  if (/^0\d{8,9}$/.test(s)) s = '+66' + s.slice(1);
+  else if (/^66\d{8,9}$/.test(s)) s = '+' + s;
+  else if (/^\d{9}$/.test(s)) s = '+66' + s; // ชีตตัดเลข 0 นำหน้าทิ้ง
+  return /^\+\d{8,15}$/.test(s) ? s : '';
+}
+
+function twilio_() {
+  const pr = PropertiesService.getScriptProperties();
+  const sid = pr.getProperty('TWILIO_SID'), token = pr.getProperty('TWILIO_TOKEN'), from = pr.getProperty('TWILIO_FROM');
+  return sid && token && from ? { sid: sid.trim(), token: token.trim(), from: phone_(from) || from.trim() } : null;
+}
+
+function twilioApi_(path, params) {
+  const t = twilio_();
+  const res = UrlFetchApp.fetch('https://api.twilio.com/2010-04-01/Accounts/' + t.sid + '/' + path, {
+    method: 'post', payload: params, muteHttpExceptions: true,
+    headers: { Authorization: 'Basic ' + Utilities.base64Encode(t.sid + ':' + t.token) }
+  });
+  const code = res.getResponseCode();
+  if (code < 200 || code >= 300) throw new Error('Twilio ' + code + ': ' + res.getContentText().slice(0, 300));
+  return JSON.parse(res.getContentText());
+}
+
+/**
+ * โทรหาทุกคนที่ยังไม่ตอบรับ (คืนจำนวนคนที่ยังรอตอบรับและอยู่ในช่วงโทร — ใช้ตัดสินว่าตัวส่งซ้ำต้องทำงานต่อไหม)
+ * คนที่รับ push ได้: รอ CALL_FIRST_AFTER_SEC ก่อน · คนที่ไม่มี push: โทรทันที
+ */
+function callPending_() {
+  if (!twilio_()) return 0;
+  const now = Date.now();
+  const calls = table_(SHEET.CALLS).filter(c => c.Status === 'active' && now - ms_(c.CreatedAt) < CALL_FOR_MIN * 60000);
+  if (!calls.length) return 0;
+  const acked = ackedSet_();
+  const hasPush = {};
+  table_(SHEET.PUSH).forEach(s => { hasPush[s.StaffID] = true; });
+  const cache = CacheService.getScriptCache();
+  let waiting = 0;
+  table_(SHEET.STAFF).forEach(me => {
+    if (!phone_(me.Phone)) return;
+    const mine = calls.filter(c => targets_(c, me) && !acked[c.CallID + '|' + me.StaffID]);
+    if (!mine.length) return;
+    waiting++;
+    const c = mine[mine.length - 1];
+    if (hasPush[me.StaffID] && now - ms_(c.CreatedAt) < CALL_FIRST_AFTER_SEC * 1000) return; // ให้เวลาตอบรับจาก push ก่อน
+    if (cache.get('vcall_' + me.StaffID)) return; // เพิ่งโทรไป
+    cache.put('vcall_' + me.StaffID, '1', CALL_EVERY_SEC);
+    try { voiceCall_(me, c); } catch (err) { console.error('call ' + me.StaffID + ': ' + err); }
+    if (SEND_SMS && !cache.get('vsms_' + c.CallID + me.StaffID)) {
+      cache.put('vsms_' + c.CallID + me.StaffID, '1', 21600);
+      try { sms_(me, c); } catch (err) { console.error('sms ' + me.StaffID + ': ' + err); }
+    }
+  });
+  return waiting;
+}
+
+const xml_ = s => String(s == null ? '' : s).replace(/[<>&'"]/g, ch => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[ch]));
+
+function webAppUrl_() {
+  return PropertiesService.getScriptProperties().getProperty('WEBAPP_URL') || ScriptApp.getService().getUrl();
+}
+
+function ackSig_(staffId, callId) { return hash_('ack|' + vapid_().d.toString(16) + '|' + staffId + '|' + callId).slice(0, 24); }
+
+/** โทรออก: อ่านข้อความเป็นภาษาไทย วน 3 รอบ — กด 1 = รับทราบ */
+function voiceCall_(me, c) {
+  const t = twilio_();
+  const say = s => '<Say language="th-TH" voice="' + THAI_VOICE + '">' + xml_(s) + '</Say><Pause length="1"/>';
+  const text = c
+    ? 'คุณ ' + me.Nickname + '. มีการเรียกปฏิบัติหน้าที่จากผู้บังคับบัญชา. ' + c.Message + '. ' + (c.Detail ? c.Detail + '. ' : '') + 'กด หนึ่ง เพื่อรับทราบ.'
+    : 'คุณ ' + me.Nickname + '. นี่คือการทดสอบโทรอัตโนมัติจากระบบ Call Of Duty. ระบบพร้อมใช้งาน.';
+  let twiml;
+  if (c) {
+    const url = webAppUrl_() + '?action=twilioAck&s=' + encodeURIComponent(me.StaffID) + '&c=' + encodeURIComponent(c.CallID) + '&k=' + ackSig_(me.StaffID, c.CallID);
+    twiml = '<Response><Gather numDigits="1" timeout="6" method="GET" action="' + xml_(url) + '">' + say(text) + say(text) + say(text) +
+      '</Gather>' + say('ยังไม่ได้รับการตอบรับ. ระบบจะโทรอีกครั้ง. กรุณาเปิดแอปแล้วกดรับทราบ.') + '</Response>';
+  } else {
+    twiml = '<Response>' + say(text) + say(text) + '</Response>';
+  }
+  return twilioApi_('Calls.json', { To: phone_(me.Phone), From: t.from, Twiml: twiml, Timeout: String(CALL_RING_SEC) });
+}
+
+function sms_(me, c) {
+  const t = twilio_();
+  const body = '🚨 Call Of Duty: ' + c.Message + (c.Detail ? ' — ' + c.Detail : '') + '\nกรุณาเปิดแอปแล้วกด "รับทราบ" ทันที';
+  return twilioApi_('Messages.json', { To: phone_(me.Phone), From: t.from, Body: body.slice(0, 600) });
+}
+
+/** Twilio เรียกกลับเมื่อผู้รับสายกดปุ่ม → กด 1 = บันทึกการตอบรับ */
+function twilioAck_(p) {
+  const out = s => ContentService.createTextOutput('<?xml version="1.0" encoding="UTF-8"?><Response>' + s + '</Response>').setMimeType(ContentService.MimeType.XML);
+  const say = s => '<Say language="th-TH" voice="' + THAI_VOICE + '">' + xml_(s) + '</Say>';
+  const s = clean_(p.s), c = clean_(p.c);
+  if (!s || !c || String(p.k || '') !== ackSig_(s, c)) return out(say('ไม่สามารถยืนยันได้'));
+  if (String(p.Digits || '') !== '1') return out(say('กรุณาเปิดแอปแล้วกดรับทราบ. ระบบจะโทรอีกครั้ง.'));
+  try { ackCall_(s, c); } catch (err) { return out(say('บันทึกไม่สำเร็จ. กรุณากดรับทราบในแอป.')); }
+  CacheService.getScriptCache().remove('vcall_' + s);
+  return out(say('รับทราบแล้ว. แจ้งผู้บังคับบัญชาเรียบร้อย. ขอบคุณครับ.'));
 }
