@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Duty Call — ระบบเรียกปฏิบัติหน้าที่</title>
+  <meta name="description" content="ระบบเรียกผู้ใต้บังคับบัญชาและติดตามการตอบรับแบบเรียลไทม์">
+  <meta name="theme-color" content="#070B17">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Duty Call">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&family=Noto+Serif+Thai:wght@500;600;700&family=Cinzel:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+  <div class="bg-orb orb-1"></div><div class="bg-orb orb-2"></div><div class="bg-grid"></div>
+
+  <!-- ===== Top bar ===== -->
+  <header class="topbar">
+    <a class="brand" href="./" data-nav="home">
+      <img src="icons/icon.svg" alt="" class="brand-emblem">
+      <span class="brand-text"><span class="brand-en">DUTY CALL</span><span class="brand-th" id="orgName">ระบบเรียกปฏิบัติหน้าที่</span></span>
+    </a>
+    <div class="topbar-actions">
+      <span class="mode-badge" id="modeBadge" hidden></span>
+      <button class="btn-install" id="installBtn" type="button" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-4.5-4.5M12 15l4.5-4.5M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>เพิ่มไปยังหน้าจอโฮม</span>
+      </button>
+      <button class="btn-ghost sm" id="logoutBtn" type="button" hidden>ออกจากระบบ</button>
+    </div>
+  </header>
+
+  <main id="app">
+
+    <!-- ===== HOME ===== -->
+    <section class="screen" id="screen-home">
+      <div class="hero">
+        <div class="hero-emblem"><img src="icons/icon.svg" alt=""></div>
+        <p class="eyebrow">Command &amp; Response System</p>
+        <h1 class="display">ระบบเรียกปฏิบัติหน้าที่</h1>
+        <p class="lead">เรียกผู้ใต้บังคับบัญชาได้ทันที ด้วยสัญญาณเสียงและการสั่นที่ไม่หยุดจนกว่าจะตอบรับ<br>พร้อมติดตามสถานะการตอบรับแบบเรียลไทม์</p>
+      </div>
+
+      <div class="role-grid">
+        <button class="role-card" data-nav="cmd-login" type="button">
+          <span class="role-icon">
+            <svg viewBox="0 0 24 24"><path d="M12 2l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 15.6 6.6 18.5l1.2-6L3.3 8.3l6.1-.7z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="role-en">COMMANDER</span>
+          <span class="role-th">ผู้บังคับบัญชา</span>
+          <span class="role-desc">ส่งสัญญาณเรียก และติดตามการตอบรับของกำลังพล</span>
+          <span class="role-cta">เข้าสู่ระบบ <i>→</i></span>
+        </button>
+        <button class="role-card" data-nav="staff" type="button">
+          <span class="role-icon">
+            <svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8.5 12l2.4 2.4L15.8 9.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="role-en">STAFF</span>
+          <span class="role-th">ผู้ใต้บังคับบัญชา</span>
+          <span class="role-desc">ลงทะเบียน รอรับสัญญาณเรียก และกดตอบรับคำสั่ง</span>
+          <span class="role-cta">เข้าสู่ระบบ <i>→</i></span>
+        </button>
+      </div>
+
+      <div class="install-hint card-glass" id="installCard" hidden>
+        <div>
+          <strong>ติดตั้งแอปไว้บนหน้าจอโทรศัพท์</strong>
+          <p>เปิดใช้งานได้ทันทีเหมือนแอปทั่วไป และรับการแจ้งเตือนได้ดีขึ้น</p>
+        </div>
+        <button class="btn-gold" type="button" data-install>เพิ่มไปยังหน้าจอโฮม</button>
+      </div>
+    </section>
+
+    <!-- ===== COMMANDER LOGIN ===== -->
+    <section class="screen" id="screen-cmd-login" hidden>
+      <form class="panel narrow" id="cmdLoginForm" autocomplete="off" novalidate>
+        <div class="panel-head center">
+          <span class="seal">★</span>
+          <p class="eyebrow">Commander Access</p>
+          <h2 class="title">เข้าสู่ระบบผู้บังคับบัญชา</h2>
+        </div>
+        <label class="field">
+          <span>ชื่อผู้ใช้</span>
+          <input name="user" type="text" placeholder="commander" autocapitalize="none" spellcheck="false" required>
+        </label>
+        <label class="field">
+          <span>รหัสเข้าใช้งาน</span>
+          <input name="pin" type="password" inputmode="numeric" placeholder="••••" maxlength="12" required>
+        </label>
+        <p class="form-error" id="cmdLoginError" hidden></p>
+        <button class="btn-gold block lg" type="submit">เข้าสู่ระบบ</button>
+        <button class="btn-link" type="button" data-nav="home">← กลับหน้าหลัก</button>
+      </form>
+    </section>
+
+    <!-- ===== COMMANDER DASHBOARD ===== -->
+    <section class="screen" id="screen-cmd" hidden>
+      <div class="dash-head">
+        <div>
+          <p class="eyebrow">Command Center</p>
+          <h2 class="title">ศูนย์บัญชาการ</h2>
+        </div>
+        <div class="stat-row">
+          <div class="stat"><span class="stat-num" id="statOnline">0</span><span class="stat-label">ออนไลน์</span></div>
+          <div class="stat"><span class="stat-num" id="statTotal">0</span><span class="stat-label">กำลังพลทั้งหมด</span></div>
+          <div class="stat"><span class="stat-num" id="statActive">0</span><span class="stat-label">คำสั่งที่เปิดอยู่</span></div>
+        </div>
+      </div>
+
+      <div class="dash-grid">
+        <!-- Call composer -->
+        <div class="panel">
+          <div class="panel-head">
+            <h3 class="subtitle">ส่งสัญญาณเรียก</h3>
+            <p class="muted">เลือกประเภทการเรียก ผู้รับจะได้รับเสียงเตือนและการสั่นจนกว่าจะกดตอบรับ</p>
+          </div>
+          <div class="preset-grid" id="presetGrid"></div>
+          <label class="field" id="customField" hidden>
+            <span>ข้อความเรียก (กำหนดเอง)</span>
+            <input id="customMsg" type="text" maxlength="120" placeholder="เช่น รวมพลที่ลานหน้าอาคาร 1">
+          </label>
+          <label class="field">
+            <span>รายละเอียดเพิ่มเติม <em class="muted">(ไม่บังคับ)</em></span>
+            <textarea id="callDetail" rows="2" maxlength="300" placeholder="สถานที่ เวลา หรือคำสั่งเพิ่มเติม"></textarea>
+          </label>
+          <div class="field">
+            <span>ผู้รับ</span>
+            <div class="seg" id="targetSeg"></div>
+          </div>
+          <button class="btn-call" id="sendCallBtn" type="button">
+            <span class="btn-call-ring"></span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a2.5 2.5 0 002.5-2.5h-5A2.5 2.5 0 0012 22zm7-6V11a7 7 0 00-5.5-6.8V3.5a1.5 1.5 0 00-3 0v.7A7 7 0 005 11v5l-2 2v1h18v-1z" fill="currentColor"/></svg>
+            <span>ส่งสัญญาณเรียก</span>
+          </button>
+        </div>
+
+        <!-- Active calls -->
+        <div class="panel">
+          <div class="panel-head row">
+            <h3 class="subtitle">สถานะการตอบรับ</h3>
+            <span class="live-dot">LIVE</span>
+          </div>
+          <div id="activeCalls" class="call-list"></div>
+        </div>
+      </div>
+
+      <div class="dash-grid">
+        <div class="panel">
+          <div class="panel-head row">
+            <h3 class="subtitle">ทะเบียนกำลังพล</h3>
+            <input class="search" id="rosterSearch" type="search" placeholder="ค้นหาชื่อ / ทีม">
+          </div>
+          <div class="roster" id="roster"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3 class="subtitle">ประวัติการเรียก</h3></div>
+          <div id="callHistory" class="history"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== STAFF REGISTER ===== -->
+    <section class="screen" id="screen-staff-reg" hidden>
+      <form class="panel narrow" id="regForm" autocomplete="on" novalidate>
+        <div class="panel-head center">
+          <span class="seal">✦</span>
+          <p class="eyebrow">Staff Registration</p>
+          <h2 class="title" id="regTitle">ลงทะเบียนผู้ใต้บังคับบัญชา</h2>
+          <p class="muted">กรุณากรอกข้อมูลให้ครบทุกช่อง</p>
+        </div>
+        <div class="field-row">
+          <label class="field"><span>ชื่อจริง <b>*</b></span><input name="firstName" type="text" autocomplete="given-name" required maxlength="60"></label>
+          <label class="field"><span>นามสกุล <b>*</b></span><input name="lastName" type="text" autocomplete="family-name" required maxlength="60"></label>
+        </div>
+        <div class="field-row">
+          <label class="field"><span>ชื่อเล่น <b>*</b></span><input name="nickname" type="text" autocomplete="nickname" required maxlength="40"></label>
+          <label class="field"><span>ทีม <b>*</b></span><input name="team" type="text" list="teamList" required maxlength="60" placeholder="เลือกหรือพิมพ์ชื่อทีม"></label>
+        </div>
+        <datalist id="teamList"></datalist>
+        <label class="field"><span>ไอดีไลน์ (LINE ID) <b>*</b></span><input name="lineId" type="text" autocapitalize="none" spellcheck="false" required maxlength="60" placeholder="@yourline"></label>
+        <p class="form-error" id="regError" hidden></p>
+        <button class="btn-gold block lg" type="submit" id="regSubmit">ลงทะเบียน</button>
+        <button class="btn-link" type="button" data-nav="home" id="regBack">← กลับหน้าหลัก</button>
+      </form>
+    </section>
+
+    <!-- ===== STAFF DUTY ===== -->
+    <section class="screen" id="screen-staff" hidden>
+      <div class="panel narrow duty">
+        <div class="duty-status" id="dutyStatus">
+          <div class="radar"><span></span><span></span><span></span><i></i></div>
+          <p class="eyebrow">On Duty</p>
+          <h2 class="title">พร้อมรับคำสั่ง</h2>
+          <p class="muted" id="dutyHint">เปิดหน้านี้ค้างไว้ ระบบจะแจ้งเตือนทันทีเมื่อมีการเรียก</p>
+        </div>
+
+        <div class="profile">
+          <div class="avatar" id="pfAvatar">–</div>
+          <div class="profile-body">
+            <div class="profile-name" id="pfName">–</div>
+            <div class="profile-meta"><span class="chip" id="pfTeam">–</span><span class="chip line" id="pfLine">–</span></div>
+          </div>
+        </div>
+
+        <div class="check-list" id="checkList">
+          <div class="check" id="ckSound"><i></i><span>เสียงเตือน</span><em>พร้อม</em></div>
+          <div class="check" id="ckNotif"><i></i><span>การแจ้งเตือนระบบ</span><em>–</em></div>
+          <div class="check" id="ckWake"><i></i><span>ป้องกันหน้าจอดับ</span><em>–</em></div>
+          <div class="check" id="ckConn"><i></i><span>การเชื่อมต่อ</span><em>–</em></div>
+        </div>
+
+        <div class="btn-stack">
+          <button class="btn-gold block" type="button" id="enableNotifBtn" hidden>อนุญาตการแจ้งเตือน</button>
+          <button class="btn-outline block" type="button" id="testAlarmBtn">ทดสอบเสียงเตือน</button>
+          <button class="btn-gold block" type="button" data-install id="staffInstallBtn" hidden>เพิ่มไปยังหน้าจอโฮม</button>
+          <button class="btn-ghost block" type="button" id="editProfileBtn">แก้ไขข้อมูล</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== Gate: tap to start (unlock audio) ===== -->
+  <div class="gate" id="gate" hidden>
+    <div class="gate-inner">
+      <img src="icons/icon.svg" alt="" class="gate-emblem">
+      <p class="eyebrow">Ready for Duty</p>
+      <h2 class="title">เริ่มปฏิบัติหน้าที่</h2>
+      <p class="muted">แตะปุ่มด้านล่างเพื่อเปิดเสียงเตือนและเริ่มรอรับสัญญาณเรียก</p>
+      <button class="btn-gold lg" type="button" id="gateBtn">แตะเพื่อเริ่ม</button>
+    </div>
+  </div>
+
+  <!-- ===== Alarm overlay ===== -->
+  <div class="alarm" id="alarm" hidden role="alertdialog" aria-modal="true" aria-labelledby="alarmMsg">
+    <div class="alarm-flash"></div>
+    <div class="alarm-inner">
+      <div class="alarm-bell">
+        <svg viewBox="0 0 24 24"><path d="M12 22a2.5 2.5 0 002.5-2.5h-5A2.5 2.5 0 0012 22zm7-6V11a7 7 0 00-5.5-6.8V3.5a1.5 1.5 0 00-3 0v.7A7 7 0 005 11v5l-2 2v1h18v-1z" fill="currentColor"/></svg>
+      </div>
+      <p class="alarm-eyebrow">สัญญาณเรียกจากผู้บังคับบัญชา</p>
+      <h2 class="alarm-msg" id="alarmMsg">–</h2>
+      <p class="alarm-detail" id="alarmDetail"></p>
+      <p class="alarm-time" id="alarmTime"></p>
+      <button class="btn-ack" id="ackBtn" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>รับทราบ / ตอบรับ</span>
+      </button>
+      <p class="alarm-queue" id="alarmQueue"></p>
+    </div>
+  </div>
+
+  <!-- ===== iOS / manual install guide ===== -->
+  <div class="sheet-backdrop" id="installSheet" hidden>
+    <div class="sheet">
+      <div class="sheet-grip"></div>
+      <h3 class="subtitle">เพิ่มไปยังหน้าจอโฮม</h3>
+      <div id="installSteps"></div>
+      <button class="btn-gold block" type="button" data-close-sheet>เข้าใจแล้ว</button>
+    </div>
+  </div>
+
+  <!-- ===== Confirm modal ===== -->
+  <div class="modal-backdrop" id="confirmModal" hidden>
+    <div class="modal">
+      <h3 class="subtitle" id="confirmTitle">ยืนยัน</h3>
+      <p class="muted" id="confirmBody"></p>
+      <div class="modal-actions">
+        <button class="btn-ghost" type="button" id="confirmNo">ยกเลิก</button>
+        <button class="btn-gold" type="button" id="confirmYes">ยืนยัน</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script src="config.js"></script>
+  <script src="assets/app.js"></script>
+</body>
+</html>
