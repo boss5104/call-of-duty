@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&family=Noto+Serif+Thai:wght@500;600;700&family=Cinzel:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="assets/app.css?v=2026.11.27-1457">
+  <link rel="stylesheet" href="assets/app.css?v=2026.11.27-1503">
 </head>
 <body>
   <div class="bg-orb orb-1"></div><div class="bg-orb orb-2"></div><div class="bg-grid"></div>
@@ -260,9 +260,10 @@
   <div class="gate" id="gate" hidden>
     <div class="gate-inner">
       <img src="icons/icon.svg" alt="" class="gate-emblem">
-      <p class="eyebrow">Ready for Duty</p>
-      <h2 class="title">เริ่มปฏิบัติหน้าที่</h2>
-      <p class="muted">แตะปุ่มด้านล่างเพื่อเปิดเสียงเตือนและเริ่มรอรับสัญญาณเรียก</p>
+      <p class="eyebrow" id="gateEyebrow">Ready for Duty</p>
+      <h2 class="title" id="gateTitle">เริ่มปฏิบัติหน้าที่</h2>
+      <p class="muted" id="gateText">แตะปุ่มด้านล่างเพื่อเปิดเสียงเตือนและเริ่มรอรับสัญญาณเรียก</p>
+      <div class="gate-help" id="gateHelp" hidden></div>
       <button class="btn-gold lg" type="button" id="gateBtn">แตะเพื่อเริ่ม</button>
     </div>
   </div>
@@ -320,7 +321,7 @@
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
 
-  <script src="config.js?v=2026.11.27-1457"></script>
-  <script src="assets/app.js?v=2026.11.27-1457"></script>
+  <script src="config.js?v=2026.11.27-1503"></script>
+  <script src="assets/app.js?v=2026.11.27-1503"></script>
 </body>
 </html>
