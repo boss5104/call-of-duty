@@ -1,11 +1,12 @@
 /* Call Of Duty Modern Warfare service worker: ติดตั้งเป็นแอป + แจ้งเตือนแบบ push (เด้งขึ้นจอแม้ปิดแอป) */
-const CACHE = 'duty-call-v10';
+const CACHE = 'duty-call-v11';
 const CFG_CACHE = 'dc-cfg';          // ที่เก็บ API URL ที่หน้าเว็บส่งมาให้ (ห้ามลบตอนอัปเดต)
 const CFG_KEY = './__dc_cfg';
 const SHELL = ['./', './index.html', './assets/app.css', './assets/app.js', './config.js',
   './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png'];
-// สั่นยาว ๆ ~10 วินาที (Android) — iPhone ไม่รองรับการสั่นผ่านเว็บ
-const VIBRATE = [1000, 200, 1000, 200, 1000, 200, 1000, 200, 1000, 200, 1000, 200, 1000, 200, 1000];
+// สั่นแรงต่อเนื่อง ~15 วินาที (Android) — iPhone ไม่รองรับการสั่นผ่านเว็บ (ใช้การสั่นของเสียงแจ้งเตือนระบบแทน)
+const VIBRATE = [2000, 150, 2000, 150, 2000, 150, 2000, 150, 2000, 150, 2000, 150, 2000];
+const selfClosed = new Set(); // แจ้งเตือนที่ระบบปิดเองเพื่อแทนที่ด้วยอันใหม่ (ไม่ใช่ผู้ใช้ปัด)
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).catch(() => {}));
@@ -71,10 +72,14 @@ async function api(action, p) {
 
 const acked = new Set(); // การเรียกที่กดรับทราบจากแจ้งเตือนแล้ว (กันเด้งซ้ำระหว่างรอเซิร์ฟเวอร์)
 
-function callNotification(c) {
-  return self.registration.showNotification('🚨 ' + (c.message || 'มีการเรียกปฏิบัติหน้าที่'), {
+// แต่ละรอบสร้างแจ้งเตือน "ใหม่" (tag ไม่ซ้ำ) เพื่อให้มือถือดัง + สั่นทุกครั้ง แล้วลบอันเก่าของการเรียกเดียวกันออก
+// (การแทนที่ tag เดิม: iPhone และ Android บางรุ่นจะไม่ดังซ้ำ)
+async function callNotification(c) {
+  const tag = 'call-' + c.callId + '~' + Date.now();
+  const old = (await self.registration.getNotifications()).filter(n => callIdOf(n) === c.callId);
+  await self.registration.showNotification('🚨 ' + (c.message || 'มีการเรียกปฏิบัติหน้าที่'), {
     body: (c.detail ? c.detail + '\n' : '') + 'กด “รับทราบ / ตอบรับ” — แจ้งเตือนจะดังซ้ำจนกว่าจะตอบรับ',
-    tag: 'call-' + c.callId,
+    tag: tag,
     renotify: true,             // ดัง + สั่นใหม่ทุกครั้งที่ส่งซ้ำ
     requireInteraction: true,   // ค้างบนจอจนกว่าจะกด
     silent: false,
@@ -88,6 +93,7 @@ function callNotification(c) {
       { action: 'open', title: '🔊 เปิดแอป' }
     ]
   });
+  old.forEach(n => { selfClosed.add(n.tag); n.close(); });
 }
 
 async function onPush(e) {
@@ -119,9 +125,9 @@ async function onPush(e) {
     setTimeout(() => self.registration.getNotifications({ tag: 'dc-info' }).then(l => l.forEach(n => n.close())), 3000);
     return;
   }
-  const live = new Set(calls.map(c => 'call-' + c.callId));
-  (await self.registration.getNotifications()).forEach(n => { if (/^call-/.test(n.tag) && !live.has(n.tag)) n.close(); });
-  await Promise.all(calls.map(callNotification));
+  const live = new Set(calls.map(c => c.callId));
+  (await self.registration.getNotifications()).forEach(n => { if (/^call-/.test(n.tag) && !live.has(callIdOf(n))) { selfClosed.add(n.tag); n.close(); } });
+  for (const c of calls) await callNotification(c);
 }
 
 self.addEventListener('push', e => { e.waitUntil(onPush(e)); });
@@ -154,7 +160,7 @@ async function openApp() {
 }
 
 function callIdOf(n) {
-  return (n.data && n.data.callId) || (/^call-(.+)$/.exec(n.tag || '') || [])[1] || '';
+  return (n.data && n.data.callId) || (/^call-([^~]+)/.exec(n.tag || '') || [])[1] || '';
 }
 
 self.addEventListener('notificationclick', e => {
@@ -182,6 +188,7 @@ self.addEventListener('notificationclick', e => {
 // ปัดแจ้งเตือนทิ้งโดยไม่ตอบรับ → เด้งกลับมาใหม่ทันที (พร้อมเสียง/สั่น)
 self.addEventListener('notificationclose', e => {
   const n = e.notification, id = callIdOf(n);
+  if (selfClosed.delete(n.tag)) return; // ระบบปิดเองเพื่อแทนที่ ไม่ใช่ผู้ใช้ปัด
   if (!/^call-/.test(n.tag || '') || !id || acked.has(id)) return;
   e.waitUntil((async () => {
     if (id !== 'unknown') {
