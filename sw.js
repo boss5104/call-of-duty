@@ -1,5 +1,5 @@
 /* Call Of Duty Modern Warfare service worker: ติดตั้งเป็นแอป + แสดงการแจ้งเตือนระบบ */
-const CACHE = 'duty-call-v6';
+const CACHE = 'duty-call-v7';
 const SHELL = ['./', './index.html', './assets/app.css', './assets/app.js', './config.js',
   './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png'];
 
@@ -17,8 +17,12 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
+  if (url.pathname.endsWith('/version.json')) return; // ให้ไปถึงเซิร์ฟเวอร์ตรง ๆ เสมอ
+  const fresh = e.request.mode === 'navigate'
+    ? new Request(url.href, { cache: 'no-cache', credentials: 'same-origin' })
+    : new Request(e.request, { cache: 'no-cache' });
   e.respondWith(
-    fetch(e.request).then(res => {
+    fetch(fresh).then(res => {
       const copy = res.clone();
       caches.open(CACHE).then(c => c.put(e.request, copy)).catch(() => {});
       return res;
