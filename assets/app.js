@@ -2,8 +2,8 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.11.27-1527'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
-  const APP_CHANGES = 'ลงทะเบียนเลือกทีม A / B / C / D · ผู้บังคับบัญชาเห็นผลการส่งแจ้งเตือนล่าสุด · แก้การส่ง push';
+  const APP_VERSION = '2026.11.27-1531'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
+  const APP_CHANGES = 'เสียงเตือนดังขึ้น · สั่นแรงต่อเนื่อง · แจ้งเตือนดัง+สั่นใหม่ทุกครั้งที่ส่งซ้ำ (รวม iPhone)';
   const CFG = Object.assign({ API_URL: '', TEAMS: [], STAFF_POLL_MS: 4000, COMMANDER_POLL_MS: 3000 }, window.DUTY_CONFIG || {});
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -184,6 +184,14 @@
     unlock() {
       try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (_) {} // iOS: ดังแม้เปิดโหมดเงียบ
       try {
+        // iOS รุ่นเก่า: เล่นเสียงเงียบผ่าน <audio> ให้ระบบใช้ช่องเสียง "สื่อ" (ไม่ถูกสวิตช์ปิดเสียงตัด)
+        if (!this.keepAlive && /iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document) {
+          const a = this.keepAlive = new Audio('data:audio/wav;base64,UklGRrQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YZABAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA');
+          a.loop = true; a.setAttribute('playsinline', ''); a.volume = 0.01;
+        }
+        const pr = this.keepAlive && this.keepAlive.play(); if (pr && pr.catch) pr.catch(() => {});
+      } catch (_) {}
+      try {
         if (!this.ctx) {
           const AC = window.AudioContext || window.webkitAudioContext;
           if (!AC) return false;
@@ -202,12 +210,12 @@
     buildChain() {
       const c = this.ctx;
       this.boost = c.createGain();
-      this.boost.gain.value = Math.min(6, Math.max(1, Number(CFG.ALARM_BOOST) || 4));
+      this.boost.gain.value = Math.min(8, Math.max(1, Number(CFG.ALARM_BOOST) || 6));
       const lim = c.createDynamicsCompressor();
-      lim.threshold.value = -12; lim.knee.value = 0; lim.ratio.value = 20;
-      lim.attack.value = 0.001; lim.release.value = 0.08;
+      lim.threshold.value = -24; lim.knee.value = 0; lim.ratio.value = 20;
+      lim.attack.value = 0.001; lim.release.value = 0.05;
       const makeup = c.createGain();
-      makeup.gain.value = 2.2;
+      makeup.gain.value = 3.2; // ดันเสียงเฉลี่ยให้ชนเพดาน → ดังเต็มที่ตลอดเวลา
       const clip = c.createWaveShaper();
       const n = 2048, curve = new Float32Array(n);
       for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; curve[i] = Math.tanh(2.2 * x) / Math.tanh(2.2); }
@@ -387,8 +395,9 @@
     startAlarm(id) {
       if (!this.timer && !this.src) this.play(id || this.selected);
       if (!this.vibTimer && 'vibrate' in navigator) {
-        const v = () => { try { navigator.vibrate([900, 200, 900, 200, 900]); } catch (_) {} };
-        v(); this.vibTimer = setInterval(v, 3000);
+        // สั่นแรงต่อเนื่องจนกว่าจะกดตอบรับ (Android) — iPhone ไม่รองรับการสั่นผ่านเว็บ
+        const v = () => { try { navigator.vibrate([1800, 120, 1800, 120]); } catch (_) {} };
+        v(); this.vibTimer = setInterval(v, 3800);
       }
     },
 
@@ -479,16 +488,18 @@
     async clearStale(liveIds) {
       try {
         const reg = swReg || (navigator.serviceWorker && await navigator.serviceWorker.getRegistration());
-        if (reg) (await reg.getNotifications()).forEach(n => { if (/^call-/.test(n.tag) && !liveIds.has(n.tag.slice(5))) n.close(); });
+        if (reg) (await reg.getNotifications()).forEach(n => { const id = notifCallId(n); if (id && !liveIds.has(id)) n.close(); });
       } catch (_) {}
     },
     async clear(tag) {
       try {
         const reg = swReg || (navigator.serviceWorker && await navigator.serviceWorker.getRegistration());
-        if (reg) (await reg.getNotifications({ tag })).forEach(n => n.close());
+        const id = /^call-/.test(tag) ? tag.slice(5) : null;
+        if (reg) (await reg.getNotifications()).forEach(n => { if (n.tag === tag || (id && notifCallId(n) === id)) n.close(); });
       } catch (_) {}
     }
   };
+  function notifCallId(n) { return (n.data && n.data.callId) || (/^call-([^~]+)/.exec(n.tag || '') || [])[1] || ''; }
 
   /* ---------- Web Push: เด้งแจ้งเตือนขึ้นจอแม้ปิดแอป/ล็อกหน้าจอ ---------- */
   const b64uToBytes = s => {
@@ -1270,7 +1281,7 @@
     // รีเฟรชเต็มรูปแบบ: ล้างแคช + อัปเดต service worker + ลบแจ้งเตือนเก่า แล้วโหลดใหม่
     try {
       const reg = swReg || (navigator.serviceWorker && await navigator.serviceWorker.getRegistration());
-      if (reg) (await reg.getNotifications()).forEach(n => { if (!/^call-/.test(n.tag) || !Staff.queue.some(c => 'call-' + c.callId === n.tag)) n.close(); });
+      if (reg) (await reg.getNotifications()).forEach(n => { const id = notifCallId(n); if (!id || !Staff.queue.some(c => c.callId === id)) n.close(); });
     } catch (_) {}
     sstore.del('dc_upd_try');
     Updater.pending = Updater.pending || 'manual';
