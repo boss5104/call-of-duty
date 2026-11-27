@@ -22,14 +22,14 @@ const REMIND_FOR_MIN   = 30;  // ส่งซ้ำนานสุดกี่�
 const PUSH_TTL_SEC     = 1800; // ถ้าเครื่องไม่มีเน็ต บริการ push จะเก็บไว้ส่งให้เมื่อกลับมาออนไลน์ภายในกี่วินาที
 
 // คอลัมน์ที่เป็นข้อความ (กันเลข 0 นำหน้าในไอดีไลน์/ชื่อหาย) — นับจาก 1
-const TEXT_COLS = { Staff: [1, 3, 4, 5, 6, 7], Calls: [1, 3, 4, 5, 6, 7], Responses: [1, 2, 3, 4, 5, 6], Push: [1, 2, 4] };
+const TEXT_COLS = { Staff: [1, 3, 4, 5, 6, 7], Calls: [1, 3, 4, 5, 6, 7], Responses: [1, 2, 3, 4, 5, 6], Push: [1, 2, 4, 5, 6] };
 
 const SHEET = { STAFF: 'Staff', CALLS: 'Calls', RESP: 'Responses', PUSH: 'Push' };
 const HEADERS = {
   Staff:     ['StaffID', 'RegisteredAt', 'FirstName', 'LastName', 'Nickname', 'Team', 'LineID', 'LastSeen'],
   Calls:     ['CallID', 'CreatedAt', 'Message', 'Detail', 'Priority', 'Target', 'Status', 'ClosedAt'],
   Responses: ['CallID', 'StaffID', 'FullName', 'Nickname', 'Team', 'LineID', 'RespondedAt'],
-  Push:      ['Endpoint', 'StaffID', 'UpdatedAt', 'Device']
+  Push:      ['Endpoint', 'StaffID', 'UpdatedAt', 'Device', 'P256dh', 'Auth']
 };
 
 /* ---------------- Entry points ---------------- */
@@ -158,8 +158,9 @@ const ROUTES = {
       const sh = sheet_(SHEET.PUSH);
       const rows = table_(SHEET.PUSH);
       const i = rows.findIndex(r => r.Endpoint === ep);
-      const row = [ep, id, new Date(), clean_(p.device).slice(0, 120)];
-      if (i >= 0) sh.getRange(i + 2, 1, 1, 4).setValues([row]); else sh.appendRow(row);
+      const keys = (sub && sub.keys) || {};
+      const row = [ep, id, new Date(), clean_(p.device).slice(0, 120), String(keys.p256dh || '').slice(0, 200), String(keys.auth || '').slice(0, 100)];
+      if (i >= 0) sh.getRange(i + 2, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
       bust_(SHEET.PUSH);
       return {};
     });
@@ -190,7 +191,7 @@ const ROUTES = {
     const cache = CacheService.getScriptCache();
     subs.forEach(s => cache.put('ptest_' + hash_(s.Endpoint), '1', 120));
     Utilities.sleep(Math.min(15, Math.max(0, Number(p.delay) || 10)) * 1000);
-    return { sent: sendPush_(subs.map(s => s.Endpoint)) };
+    return { sent: sendPush_(subs.map(s => ({ sub: s, data: { t: 'test' } }))) };
   }
 };
 
@@ -237,11 +238,22 @@ function pushPending_() {
   const calls = remindable_();
   if (!calls.length) return 0;
   const acked = ackedSet_();
-  const eps = subs.filter(s => {
+  const items = [];
+  subs.forEach(s => {
     const me = staff[s.StaffID];
-    return me && calls.some(c => targets_(c, me) && !acked[c.CallID + '|' + me.StaffID]);
-  }).map(s => s.Endpoint);
-  return eps.length ? sendPush_(eps) : 0;
+    if (!me) return;
+    const mine = calls.filter(c => targets_(c, me) && !acked[c.CallID + '|' + me.StaffID]);
+    if (mine.length) items.push({ sub: s, data: { t: 'call', calls: mine.slice(-5).map(pushCall_) } });
+  });
+  return items.length ? sendPush_(items) : 0;
+}
+
+/** ข้อมูลการเรียกแบบย่อ (push ส่งได้ไม่เกิน ~4KB) */
+function pushCall_(c) {
+  const o = callOut_(c);
+  o.message = String(o.message || '').slice(0, 150);
+  o.detail = String(o.detail || '').slice(0, 300);
+  return o;
 }
 
 function ensureTicker_() {
@@ -254,13 +266,28 @@ function stopTicker_() {
   ScriptApp.getProjectTriggers().forEach(t => { if (t.getHandlerFunction() === 'pushTick') ScriptApp.deleteTrigger(t); });
 }
 
-/** ส่ง Web Push แบบไม่มีเนื้อหา (service worker จะดึงรายละเอียดเอง) — ลบเครื่องที่ยกเลิกการแจ้งเตือนแล้วออก */
-function sendPush_(endpoints) {
+/**
+ * ส่ง Web Push: items = [{ sub: แถวในแท็บ Push, data: object }]
+ * เข้ารหัสข้อมูลตาม RFC 8291 (aes128gcm) ส่งไปพร้อมแจ้งเตือน — เครื่องปลายทางแสดงได้ทันทีโดยไม่ต้องติดต่อเซิร์ฟเวอร์
+ * เครื่องที่ยกเลิกการแจ้งเตือนไปแล้ว (404/410) จะถูกลบออกอัตโนมัติ
+ */
+function sendPush_(items) {
   const key = vapid_();
-  const reqs = endpoints.map(ep => ({
-    url: ep, method: 'post', muteHttpExceptions: true, followRedirects: false,
-    headers: { TTL: String(PUSH_TTL_SEC), Urgency: 'high', Authorization: 'vapid t=' + vapidJwt_(ep, key) + ', k=' + key.pub }
-  }));
+  const eph = ephemeralKey_();
+  const reqs = items.map(it => {
+    const s = it.sub;
+    const headers = { TTL: String(PUSH_TTL_SEC), Urgency: 'high', Authorization: 'vapid t=' + vapidJwt_(s.Endpoint, key) + ', k=' + key.pub };
+    const req = { url: s.Endpoint, method: 'post', muteHttpExceptions: true, followRedirects: false, headers: headers };
+    if (s.P256dh && s.Auth) {
+      try {
+        req.payload = wpEncrypt_(JSON.stringify(it.data), s.P256dh, s.Auth, eph);
+        req.contentType = 'application/octet-stream';
+        headers['Content-Encoding'] = 'aes128gcm';
+      } catch (err) { console.warn('encrypt: ' + err); }
+    }
+    if (!req.payload) { req.payload = ''; } // เครื่องเก่าที่ยังไม่ได้ส่งกุญแจมา: ส่งแบบไม่มีเนื้อหา
+    return req;
+  });
   let res = [];
   try { res = UrlFetchApp.fetchAll(reqs); } catch (err) { console.error('push fetch: ' + err); return 0; }
   const gone = [];
@@ -268,8 +295,8 @@ function sendPush_(endpoints) {
   res.forEach((r, i) => {
     const code = r.getResponseCode();
     if (code >= 200 && code < 300) ok++;
-    else if (code === 404 || code === 410) gone.push(endpoints[i]);
-    else console.warn('push ' + code + ': ' + r.getContentText().slice(0, 200));
+    else if (code === 404 || code === 410) gone.push(items[i].sub.Endpoint);
+    else console.warn('push ' + code + ': ' + r.getContentText().slice(0, 300));
   });
   if (gone.length) removeSubs_(gone);
   return ok;
@@ -449,8 +476,9 @@ const P256 = (() => {
     const x3 = mod(r * r - hhh - TWO * v, P);
     return { x: x3, y: mod(r * (v - x3) - s1 * hhh, P), z: mod(p.z * q.z * h, P) };
   };
-  const mul = (k) => {
-    let R = null, Q = { x: G.x, y: G.y, z: ONE };
+  const mul = (k, pt) => {
+    pt = pt || G;
+    let R = null, Q = { x: pt.x, y: pt.y, z: ONE };
     while (k > ZERO) { if (k & ONE) R = add(R, Q); Q = dbl(Q); k >>= ONE; }
     if (!R) return null;
     const zi = inv(R.z, P), zi2 = mod(zi * zi, P);
@@ -530,4 +558,135 @@ function vapidJwt_(endpoint, key) {
   const jwt = input + '.' + b64u_(ecdsaSign_(Utilities.newBlob(input).getBytes(), key.d));
   cache.put(ck, jwt, 21600); // CacheService เก็บได้สูงสุด 6 ชม.
   return (vapidJwt_.mem[aud] = jwt);
+}
+
+/* =====================================================================
+ * Web Push Message Encryption (RFC 8291 / RFC 8188 aes128gcm)
+ * ECDH P-256 + HKDF-SHA256 + AES-128-GCM เขียนด้วย JS ล้วน
+ * ===================================================================== */
+
+const u8_ = a => a.map(b => b & 255);                    // Java byte (-128..127) → 0..255
+const s8_ = a => a.map(b => (b > 127 ? b - 256 : b));    // 0..255 → Java byte
+const hmac_ = (key, data) => u8_(Utilities.computeHmacSha256Signature(s8_(data), s8_(key)));
+const utf8_ = str => u8_(Utilities.newBlob(str).getBytes());
+const b64uDec_ = str => u8_(Utilities.base64DecodeWebSafe(str + '==='.slice((str.length + 3) % 4)));
+
+/** กุญแจชั่วคราวฝั่งเซิร์ฟเวอร์ (ใช้ร่วมกันในการส่งหนึ่งรอบ) */
+function ephemeralKey_() {
+  const d = randScalar_([]);
+  const Q = P256.mul(d);
+  return { d: d, pub: [4].concat(u8_(bigToBytes_(Q.x, 32)), u8_(bigToBytes_(Q.y, 32))) };
+}
+
+function wpEncrypt_(text, p256dhB64, authB64, eph) {
+  const ua = b64uDec_(p256dhB64), auth = b64uDec_(authB64);
+  if (ua.length !== 65 || ua[0] !== 4 || auth.length < 16) throw new Error('bad subscription keys');
+  const uaPt = { x: bytesToBig_(ua.slice(1, 33)), y: bytesToBig_(ua.slice(33)) };
+  const shared = P256.mul(eph.d, uaPt);
+  const ecdh = u8_(bigToBytes_(shared.x, 32));
+  // HKDF (RFC 8291 §3.4)
+  const prkKey = hmac_(auth, ecdh);
+  const ikm = hmac_(prkKey, utf8_('WebPush: info').concat([0], ua, eph.pub, [1]));
+  const salt = u8_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, Utilities.getUuid() + Utilities.getUuid() + Date.now())).slice(0, 16);
+  const prk = hmac_(salt, ikm);
+  const cek = hmac_(prk, utf8_('Content-Encoding: aes128gcm').concat([0, 1])).slice(0, 16);
+  const nonce = hmac_(prk, utf8_('Content-Encoding: nonce').concat([0, 1])).slice(0, 12);
+  const plain = utf8_(text).concat([2]); // 0x02 = ระเบียนสุดท้าย
+  const ct = aesGcm_(cek, nonce, plain);
+  const header = salt.concat([0, 0, 16, 0], [65], eph.pub); // rs = 4096
+  return s8_(header.concat(ct));
+}
+
+/** AES-128-GCM encrypt → ciphertext || tag(16) */
+function aesGcm_(key, iv, pt) {
+  const rk = aesExpand_(key);
+  const enc = b => aesBlock_(rk, b);
+  const H = blockBig_(enc(new Array(16).fill(0)));
+  const j0 = iv.concat([0, 0, 0, 1]);
+  const out = [];
+  let ctr = j0.slice();
+  for (let i = 0; i < pt.length; i += 16) {
+    ctr = ctr.slice(0, 12).concat(inc32_(ctr.slice(12)));
+    const ks = enc(ctr);
+    for (let j = 0; j < 16 && i + j < pt.length; j++) out.push(pt[i + j] ^ ks[j]);
+  }
+  // GHASH(H, A = ว่าง, C)
+  let y = BigInt(0);
+  for (let i = 0; i < out.length; i += 16) {
+    const blk = out.slice(i, i + 16); while (blk.length < 16) blk.push(0);
+    y = gfMul_(y ^ blockBig_(blk), H);
+  }
+  const bits = out.length * 8;
+  const lenBlk = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (bits >>> 24) & 255, (bits >>> 16) & 255, (bits >>> 8) & 255, bits & 255];
+  y = gfMul_(y ^ blockBig_(lenBlk), H);
+  const ek = enc(j0);
+  const s = bigBlock_(y);
+  return out.concat(s.map((b, i) => b ^ ek[i]));
+}
+
+function inc32_(b) {
+  let n = ((b[0] << 24) >>> 0) + (b[1] << 16) + (b[2] << 8) + b[3];
+  n = (n + 1) >>> 0;
+  return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+}
+function blockBig_(b) { return BigInt('0x' + b.map(x => ('0' + x.toString(16)).slice(-2)).join('')); }
+function bigBlock_(x) { const h = x.toString(16).padStart(32, '0'); const o = []; for (let i = 0; i < 16; i++) o.push(parseInt(h.substr(i * 2, 2), 16)); return o; }
+function gfMul_(x, y) {
+  const R = BigInt('0xe1') << BigInt(120), ONE = BigInt(1);
+  let z = BigInt(0), v = y;
+  for (let i = 127; i >= 0; i--) {
+    if ((x >> BigInt(i)) & ONE) z ^= v;
+    v = (v & ONE) ? (v >> ONE) ^ R : v >> ONE;
+  }
+  return z;
+}
+
+const AES_SBOX_ = (() => {
+  const s = new Array(256), rotl = (x, n) => ((x << n) | (x >> (8 - n))) & 255;
+  let p = 1, q = 1;
+  s[0] = 0x63;
+  do {
+    p = (p ^ (p << 1) ^ (p & 128 ? 0x1b : 0)) & 255;            // p *= 3
+    q ^= q << 1; q ^= q << 2; q ^= q << 4; q &= 255;            // q /= 3
+    if (q & 128) q ^= 0x09;
+    s[p] = q ^ rotl(q, 1) ^ rotl(q, 2) ^ rotl(q, 3) ^ rotl(q, 4) ^ 0x63;
+  } while (p !== 1);
+  return s;
+})();
+
+function aesExpand_(key) {
+  const S = AES_SBOX_, w = key.slice();
+  let rcon = 1;
+  for (let i = 16; i < 176; i += 4) {
+    let t = w.slice(i - 4, i);
+    if (i % 16 === 0) {
+      t = [S[t[1]] ^ rcon, S[t[2]], S[t[3]], S[t[0]]];
+      rcon = (rcon << 1) ^ (rcon & 128 ? 0x11b : 0);
+    }
+    for (let j = 0; j < 4; j++) w.push(w[i - 16 + j] ^ t[j]);
+  }
+  return w;
+}
+
+function aesBlock_(w, inp) {
+  const S = AES_SBOX_;
+  const xt = b => ((b << 1) ^ (b & 128 ? 0x11b : 0)) & 255;
+  let st = inp.map((b, i) => b ^ w[i]);
+  for (let r = 1; r <= 10; r++) {
+    st = st.map(b => S[b]);
+    const sh = new Array(16);
+    for (let c = 0; c < 4; c++) for (let row = 0; row < 4; row++) sh[c * 4 + row] = st[((c + row) % 4) * 4 + row];
+    st = sh;
+    if (r < 10) {
+      const m = new Array(16);
+      for (let c = 0; c < 4; c++) {
+        const a0 = st[c * 4], a1 = st[c * 4 + 1], a2 = st[c * 4 + 2], a3 = st[c * 4 + 3], all = a0 ^ a1 ^ a2 ^ a3;
+        m[c * 4] = a0 ^ all ^ xt(a0 ^ a1); m[c * 4 + 1] = a1 ^ all ^ xt(a1 ^ a2);
+        m[c * 4 + 2] = a2 ^ all ^ xt(a2 ^ a3); m[c * 4 + 3] = a3 ^ all ^ xt(a3 ^ a0);
+      }
+      st = m;
+    }
+    st = st.map((b, i) => b ^ w[r * 16 + i]);
+  }
+  return st;
 }

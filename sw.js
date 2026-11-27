@@ -1,5 +1,5 @@
 /* Call Of Duty Modern Warfare service worker: ติดตั้งเป็นแอป + แจ้งเตือนแบบ push (เด้งขึ้นจอแม้ปิดแอป) */
-const CACHE = 'duty-call-v8';
+const CACHE = 'duty-call-v9';
 const CFG_CACHE = 'dc-cfg';          // ที่เก็บ API URL ที่หน้าเว็บส่งมาให้ (ห้ามลบตอนอัปเดต)
 const CFG_KEY = './__dc_cfg';
 const SHELL = ['./', './index.html', './assets/app.css', './assets/app.js', './config.js',
@@ -76,9 +76,15 @@ function callNotification(c) {
   });
 }
 
-async function onPush() {
+async function onPush(e) {
+  // ข้อมูลการเรียกมากับ push (เข้ารหัส) → แสดงได้ทันทีไม่ต้องรอเซิร์ฟเวอร์
   let r = null;
-  try { r = await api('swPoll'); } catch (_) {}
+  try {
+    const d = e.data && e.data.json();
+    if (d && d.t === 'test') r = { test: true, calls: [] };
+    else if (d && d.t === 'call') r = { calls: d.calls || [] };
+  } catch (_) {}
+  if (!r) { try { r = await api('swPoll'); } catch (_) {} }
   if (!r) {
     // ดึงรายละเอียดไม่ได้ (เน็ตไม่ดี) — ยังต้องเด้งเตือนอยู่ดี
     return callNotification({ callId: 'unknown', message: 'มีการเรียกปฏิบัติหน้าที่!', detail: 'แตะเพื่อเปิดแอปและกดตอบรับ' });
@@ -104,7 +110,7 @@ async function onPush() {
   await Promise.all(calls.map(callNotification));
 }
 
-self.addEventListener('push', e => { e.waitUntil(onPush()); });
+self.addEventListener('push', e => { e.waitUntil(onPush(e)); });
 
 function tellClients(msg) {
   return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => list.forEach(c => c.postMessage(msg)));

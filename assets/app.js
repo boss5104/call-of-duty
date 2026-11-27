@@ -2,7 +2,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.11.27-1443'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
+  const APP_VERSION = '2026.11.27-1452'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
   const APP_CHANGES = 'แจ้งเตือนเด้งขึ้นจอแม้ปิดแอป/ล็อกจอ ดังซ้ำทุก 20 วินาทีจนกว่าจะกดตอบรับ';
   const CFG = Object.assign({ API_URL: '', TEAMS: [], STAFF_POLL_MS: 4000, COMMANDER_POLL_MS: 3000 }, window.DUTY_CONFIG || {});
   const $ = (s, r = document) => r.querySelector(s);
