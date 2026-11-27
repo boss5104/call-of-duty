@@ -150,23 +150,17 @@ const ROUTES = {
   /* ----- Push ----- */
   pushKey: () => ({ key: vapid_().pub }),
 
-  pushSub: (p) => {
-    const id = clean_(p.staffId);
-    let sub = p.sub;
-    if (typeof sub === 'string') { try { sub = JSON.parse(sub); } catch (_) { sub = null; } }
-    const ep = String((sub && sub.endpoint) || '').trim();
-    if (!/^https:\/\/[^\s]+$/.test(ep) || ep.length > 1000) throw new Error('ข้อมูลการแจ้งเตือนไม่ถูกต้อง');
-    if (!table_(SHEET.STAFF).some(r => r.StaffID === id)) throw new Error('ไม่พบข้อมูลผู้ลงทะเบียน');
-    return withLock_(() => {
-      const sh = sheet_(SHEET.PUSH);
-      const rows = table_(SHEET.PUSH);
-      const i = rows.findIndex(r => r.Endpoint === ep);
-      const keys = (sub && sub.keys) || {};
-      const row = [ep, id, new Date(), clean_(p.device).slice(0, 120), String(keys.p256dh || '').slice(0, 200), String(keys.auth || '').slice(0, 100)];
-      if (i >= 0) sh.getRange(i + 2, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
-      bust_(SHEET.PUSH);
-      return {};
-    });
+  pushSub: (p) => savePushSub_(clean_(p.staffId), p.sub, p.device),
+
+  // service worker สมัคร push ใหม่เอง (เบราว์เซอร์เปลี่ยนช่องทาง) → ผูกกับคนเดิมจาก endpoint เก่า
+  swResub: (p) => {
+    const old = String(p.oldEndpoint || '').trim();
+    const row = old && table_(SHEET.PUSH).find(r => r.Endpoint === old);
+    if (!row) throw new Error('ไม่พบข้อมูลเครื่องเดิม');
+    savePushSub_(row.StaffID, p.sub, row.Device);
+    const ep = String((p.sub && (p.sub.endpoint || (typeof p.sub === 'string' && JSON.parse(p.sub).endpoint))) || '');
+    if (ep && ep !== old) removeSubs_([old]);
+    return {};
   },
 
   // service worker เรียกเมื่อได้รับ push: ขอรายการการเรียกที่ยังไม่ตอบรับของเครื่องนี้
@@ -216,6 +210,24 @@ function setup() {
   if (def && ss.getSheets().length > 4 && def.getLastRow() === 0) ss.deleteSheet(def);
   vapid_(); // สร้างกุญแจสำหรับ push ครั้งแรก
   console.log('พร้อมใช้งาน · push public key: ' + vapid_().pub);
+}
+
+/** บันทึก/อัปเดตเครื่องที่รับ push (หนึ่งคนมีได้หลายเครื่อง) */
+function savePushSub_(id, sub, device) {
+  if (typeof sub === 'string') { try { sub = JSON.parse(sub); } catch (_) { sub = null; } }
+  const ep = String((sub && sub.endpoint) || '').trim();
+  if (!/^https:\/\/[^\s]+$/.test(ep) || ep.length > 1000) throw new Error('ข้อมูลการแจ้งเตือนไม่ถูกต้อง');
+  if (!table_(SHEET.STAFF).some(r => r.StaffID === id)) throw new Error('ไม่พบข้อมูลผู้ลงทะเบียน');
+  return withLock_(() => {
+    const sh = sheet_(SHEET.PUSH);
+    const rows = table_(SHEET.PUSH);
+    const i = rows.findIndex(r => r.Endpoint === ep);
+    const keys = (sub && sub.keys) || {};
+    const row = [ep, id, new Date(), clean_(device).slice(0, 120), String(keys.p256dh || '').slice(0, 200), String(keys.auth || '').slice(0, 100)];
+    if (i >= 0) sh.getRange(i + 2, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
+    bust_(SHEET.PUSH);
+    return {};
+  });
 }
 
 /* ---------------- Push: ส่งซ้ำจนกว่าจะตอบรับ ---------------- */

@@ -1,5 +1,5 @@
 /* Call Of Duty Modern Warfare service worker: ติดตั้งเป็นแอป + แจ้งเตือนแบบ push (เด้งขึ้นจอแม้ปิดแอป) */
-const CACHE = 'duty-call-v9';
+const CACHE = 'duty-call-v10';
 const CFG_CACHE = 'dc-cfg';          // ที่เก็บ API URL ที่หน้าเว็บส่งมาให้ (ห้ามลบตอนอัปเดต)
 const CFG_KEY = './__dc_cfg';
 const SHELL = ['./', './index.html', './assets/app.css', './assets/app.js', './config.js',
@@ -14,8 +14,22 @@ self.addEventListener('install', e => {
 
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE && k !== CFG_CACHE).map(k => caches.delete(k))))
-    .then(() => self.clients.claim()));
+    .then(() => self.clients.claim()).then(forceRefresh));
 });
+
+// บังคับรีเฟรช: หน้าเวอร์ชันใหม่จะตอบกลับและรีเฟรชเอง (รอให้กดตอบรับก่อนถ้าเสียงเตือนดังอยู่)
+// หน้าเวอร์ชันเก่าที่ไม่ตอบ → service worker สั่งโหลดใหม่ให้ทันที
+const replied = new Set();
+self.addEventListener('message', e => { if (e.data && e.data.type === 'hello' && e.source) replied.add(e.source.id); });
+async function forceRefresh() {
+  const list = await self.clients.matchAll({ type: 'window' });
+  if (!list.length) return;
+  list.forEach(c => c.postMessage({ type: 'reload' }));
+  await new Promise(r => setTimeout(r, 4000));
+  for (const c of list) {
+    if (!replied.has(c.id) && 'navigate' in c) { try { await c.navigate(c.url); } catch (_) {} }
+  }
+}
 
 // network-first สำหรับไฟล์ของแอป (ไม่แตะคำขอไปยัง Google Apps Script)
 self.addEventListener('fetch', e => {
@@ -111,6 +125,21 @@ async function onPush(e) {
 }
 
 self.addEventListener('push', e => { e.waitUntil(onPush(e)); });
+
+// เบราว์เซอร์เปลี่ยนช่องทาง push เอง → สมัครใหม่และแจ้งเซิร์ฟเวอร์ทันที (ไม่ต้องรอให้เปิดแอป)
+self.addEventListener('pushsubscriptionchange', e => {
+  e.waitUntil((async () => {
+    const c = await cfg();
+    if (!c.api) return;
+    let sub = e.newSubscription;
+    if (!sub && c.key) {
+      const raw = atob(c.key.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - c.key.length % 4) % 4));
+      sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: Uint8Array.from(raw, ch => ch.charCodeAt(0)) });
+    }
+    if (!sub) return;
+    await fetch(c.api, { method: 'POST', redirect: 'follow', body: JSON.stringify({ action: 'swResub', oldEndpoint: e.oldSubscription && e.oldSubscription.endpoint, sub: sub.toJSON() }) });
+  })().catch(() => {}));
+});
 
 function tellClients(msg) {
   return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => list.forEach(c => c.postMessage(msg)));

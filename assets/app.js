@@ -2,8 +2,8 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.11.27-1457'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
-  const APP_CHANGES = 'แจ้งเตือนเด้งขึ้นจอแม้ปิดแอป ดังซ้ำจนกว่าจะตอบรับ · ผู้บังคับบัญชาเห็นว่าใครรับแจ้งเตือนตอนปิดแอปได้ (🔔)';
+  const APP_VERSION = '2026.11.27-1503'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
+  const APP_CHANGES = 'บังคับเปิดรับแจ้งเตือนตอนปิดแอปก่อนเข้าเวร · บังคับรีเฟรชทุกเครื่องเมื่อมีเวอร์ชันใหม่';
   const CFG = Object.assign({ API_URL: '', TEAMS: [], STAFF_POLL_MS: 4000, COMMANDER_POLL_MS: 3000 }, window.DUTY_CONFIG || {});
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -420,6 +420,10 @@
     // ข้อความจาก service worker: ได้รับ push / กดรับทราบจากแจ้งเตือนแล้ว
     navigator.serviceWorker.addEventListener('message', e => {
       const m = e.data || {};
+      if (m.type === 'reload') {
+        try { e.source && e.source.postMessage({ type: 'hello' }); } catch (_) {} // บอก SW ว่าหน้านี้รีเฟรชเองได้
+        Updater.check(); return;
+      }
       if (m.type === 'acked' && m.callId) {
         Staff.acked.add(m.callId);
         Staff.queue = Staff.queue.filter(c => c.callId !== m.callId);
@@ -429,9 +433,12 @@
     });
   }
   // ให้ service worker รู้ว่าเซิร์ฟเวอร์อยู่ที่ไหน (ใช้ตอนได้รับ push ขณะปิดแอป)
-  if (window.caches && LIVE) {
-    caches.open('dc-cfg').then(c => c.put('./__dc_cfg', new Response(JSON.stringify({ api: API_URL }), { headers: { 'Content-Type': 'application/json' } }))).catch(() => {});
+  function saveSwCfg(extra) {
+    if (!window.caches || !LIVE) return;
+    const cfg = Object.assign({ api: API_URL, key: store.get('dc_push_key') || '' }, extra || {});
+    caches.open('dc-cfg').then(c => c.put('./__dc_cfg', new Response(JSON.stringify(cfg), { headers: { 'Content-Type': 'application/json' } }))).catch(() => {});
   }
+  saveSwCfg();
 
   const Notify = {
     supported: 'Notification' in window,
@@ -471,12 +478,14 @@
   const Push = {
     state: null, // null = ยังไม่ตรวจ | 'on' | 'off' | 'nosupport' | 'needinstall' | 'error'
     get supported() { return LIVE && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && location.protocol === 'https:'; },
+    last: 0,
     async ensure(force) {
       const p = Staff.profile();
       if (!LIVE) { this.state = 'demo'; return; }
-      if (!this.supported) { this.state = IOS ? 'needinstall' : 'nosupport'; return; }
-      if (!Notify.granted) { this.state = 'off'; return; }
+      if (!this.supported) { this.state = IOS ? 'needinstall' : 'nosupport'; Staff.enforce(); return; }
+      if (!Notify.granted) { this.state = 'off'; Staff.enforce(); return; }
       if (!p || !p.staffId || (this.busy && !force)) return;
+      if (!force && this.state === 'on' && Date.now() - this.last < 10 * 60000) return; // ยืนยันซ้ำทุก 10 นาที
       this.busy = true;
       try {
         const reg = await navigator.serviceWorker.ready;
@@ -485,11 +494,12 @@
         if (sub && store.get('dc_push_key') !== key) { try { await sub.unsubscribe(); } catch (_) {} sub = null; }
         if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(key) });
         store.set('dc_push_key', key);
+        saveSwCfg({ key });
         await API.call('pushSub', { staffId: p.staffId, sub: sub.toJSON(), device: deviceName() });
-        this.state = 'on';
+        this.state = 'on'; this.last = Date.now();
       } catch (e) {
         this.state = 'error'; this.err = e.message;
-      } finally { this.busy = false; Staff.renderChecks(); }
+      } finally { this.busy = false; Staff.renderChecks(); Staff.enforce(); }
     },
     async test() {
       const p = Staff.profile();
@@ -499,6 +509,7 @@
       try { await API.call('pushTest', { staffId: p.staffId, delay: 10 }); }
       catch (e) { toast('err', 'ส่งแจ้งเตือนทดสอบไม่สำเร็จ', e.message); }
     },
+    blocking() { return LIVE && ['off', 'needinstall', 'nosupport', 'error'].includes(this.state); },
     label() {
       switch (this.state) {
         case 'on': return [true, 'เปิดแล้ว'];
@@ -540,7 +551,7 @@
     if (document.visibilityState === 'visible') {
       if (Wake.want && !Wake.lock) Wake.on().then(() => Staff.renderChecks());
       if (Sound.ctx && Sound.ctx.state === 'suspended') Sound.ctx.resume();
-      if (Staff.active) Staff.poll();
+      if (Staff.active) { Staff.poll(); Push.ensure(); }
       if (Cmd.active) Cmd.poll();
     }
   });
@@ -943,11 +954,52 @@
     async activate() {
       Sound.unlock();
       await Notify.request();
-      Push.ensure();
+      await Push.ensure(true);
       await Wake.on();
-      $('#gate').hidden = true;
+      if (Push.blocking()) return this.enforce(); // บังคับ: ต้องเปิดรับแจ้งเตือนตอนปิดแอปก่อนจึงจะเข้าเวรได้
+      $('#gate').hidden = true; $('#gate').classList.remove('push');
       this.renderChecks();
       if (this.queue.length) this.ring();
+    },
+
+    /** ถ้าเครื่องนี้ยังรับแจ้งเตือนตอนปิดแอปไม่ได้ → ขึ้นหน้าบล็อกพร้อมวิธีแก้ */
+    enforce() {
+      if (current !== 'staff' || !this.active) return;
+      const g = $('#gate');
+      if (!Push.blocking()) {
+        if (g.classList.contains('push')) { g.classList.remove('push'); if (Sound.ready) g.hidden = true; this.resetGate(); }
+        return;
+      }
+      const help = $('#gateHelp');
+      const denied = 'Notification' in window && Notification.permission === 'denied';
+      g.classList.add('push');
+      $('#gateEyebrow').textContent = 'จำเป็นต้องตั้งค่า';
+      $('#gateTitle').textContent = 'เปิดรับแจ้งเตือนก่อนเข้าเวร';
+      $('#gateText').textContent = 'ต้องอนุญาตการแจ้งเตือน เพื่อให้สัญญาณเรียกเด้งขึ้นจอได้แม้ปิดแอปหรือล็อกหน้าจอ';
+      let html = '', btn = 'อนุญาตการแจ้งเตือน';
+      if (Push.state === 'needinstall') {
+        html = '<b>iPhone/iPad ต้องเพิ่มแอปลงหน้าจอโฮมก่อน</b><ol><li>กดปุ่มแชร์ (□↑) ใน Safari</li><li>เลือก “เพิ่มไปยังหน้าจอโฮม”</li><li>เปิดแอปจากไอคอนบนหน้าจอโฮม แล้วกดอนุญาตการแจ้งเตือน</li></ol>';
+        btn = 'ตรวจสอบอีกครั้ง';
+      } else if (Push.state === 'nosupport') {
+        html = '<b>เบราว์เซอร์นี้ไม่รองรับ</b> กรุณาเปิดลิงก์นี้ด้วย <b>Chrome</b> (Android) หรือ <b>Safari</b> (iPhone) แล้วติดตั้งลงหน้าจอโฮม';
+        btn = 'ตรวจสอบอีกครั้ง';
+      } else if (denied) {
+        html = '<b>การแจ้งเตือนถูกปิดกั้นไว้</b> เปิดใหม่ได้ดังนี้<ol><li>Android: แตะไอคอน 🔒 / ⓘ ข้างลิงก์ด้านบน (หรือ ข้อมูลแอป) → <b>การแจ้งเตือน</b> → <b>อนุญาต</b></li><li>iPhone: ตั้งค่า → การแจ้งเตือน → Call Of Duty → เปิด <b>อนุญาตการแจ้งเตือน</b></li><li>กลับมาที่แอปแล้วกดปุ่มด้านล่าง</li></ol>';
+        btn = 'ตรวจสอบอีกครั้ง';
+      } else if (Push.state === 'error') {
+        html = 'เชื่อมต่อระบบแจ้งเตือนไม่สำเร็จ (' + esc(Push.err || '') + ') ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่';
+        btn = 'ลองใหม่';
+      }
+      help.innerHTML = html; help.hidden = !html;
+      $('#gateBtn').textContent = btn;
+      g.hidden = false;
+    },
+    resetGate() {
+      $('#gateEyebrow').textContent = 'Ready for Duty';
+      $('#gateTitle').textContent = 'เริ่มปฏิบัติหน้าที่';
+      $('#gateText').textContent = 'แตะปุ่มด้านล่างเพื่อเปิดเสียงเตือนและเริ่มรอรับสัญญาณเรียก';
+      $('#gateHelp').hidden = true;
+      $('#gateBtn').textContent = 'แตะเพื่อเริ่ม';
     },
 
     start() {
@@ -1129,20 +1181,14 @@
         if (!r.ok) return;
         const v = String((await r.json()).version || '');
         if (v && v !== APP_VERSION) { this.pending = v; this.apply(); }
+        else if (swReg) swReg.update().catch(() => {}); // ให้ service worker เป็นเวอร์ชันล่าสุดเสมอ
       } catch (_) {}
     },
     apply() {
       if (!this.pending) return;
       if (Staff.queue.length || !$('#alarm').hidden) return; // ห้ามรีเฟรชขณะเสียงเตือนดัง — รอจนกดตอบรับ
       if (sstore.get('dc_upd_try') === this.pending) return;   // กันรีเฟรชวน ถ้ารีเฟรชแล้วยังได้ไฟล์เก่า
-      const onDuty = current === 'staff' && Staff.active && Sound.ready;
-      if (onDuty) {
-        // staff ที่กำลังเข้าเวร: หลังรีเฟรชต้องแตะเพื่อเปิดเสียงใหม่ จึงบังคับให้กดอัปเดตเอง (ระหว่างนี้ยังรับการเรียกได้ตามปกติ)
-        $('#updText').textContent = 'ระบบมีการปรับปรุง กรุณากดอัปเดต แล้วแตะ “เริ่ม” อีกครั้งเพื่อเปิดเสียงเตือน';
-        $('#updBtn').hidden = false; $('#updSpin').hidden = true;
-        $('#updateBox').hidden = false;
-        return;
-      }
+      // บังคับรีเฟรชทุกเครื่องทันที (หลังรีเฟรช ผู้ใต้บังคับบัญชาแตะ “เริ่ม” อีกครั้ง — ระหว่างนั้นยังได้รับแจ้งเตือนแบบ push ตามปกติ)
       this.reload();
     },
     async reload() {
