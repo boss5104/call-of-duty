@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&family=Noto+Serif+Thai:wght@500;600;700&family=Cinzel:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="assets/app.css?v=2026.11.27-1503">
+  <link rel="stylesheet" href="assets/app.css?v=2026.11.27-1508">
 </head>
 <body>
   <div class="bg-orb orb-1"></div><div class="bg-orb orb-2"></div><div class="bg-grid"></div>
@@ -198,6 +198,7 @@
         </div>
         <datalist id="teamList"></datalist>
         <label class="field"><span>ไอดีไลน์ (LINE ID) <b>*</b></span><input name="lineId" type="text" autocapitalize="none" spellcheck="false" required maxlength="60" placeholder="@yourline"></label>
+        <p class="reg-note">🔔 เมื่อกดลงทะเบียน ระบบจะขออนุญาตการแจ้งเตือน — <b>ต้องกด “อนุญาต”</b> เพื่อให้สัญญาณเรียกเด้งขึ้นจอได้แม้ปิดแอปหรือล็อกหน้าจอ (iPhone: เพิ่มแอปลงหน้าจอโฮมก่อน)</p>
         <p class="form-error" id="regError" hidden></p>
         <button class="btn-gold block lg" type="submit" id="regSubmit">ลงทะเบียน</button>
         <button class="btn-link" type="button" data-nav="home" id="regBack">← กลับหน้าหลัก</button>
@@ -321,7 +322,7 @@
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
 
-  <script src="config.js?v=2026.11.27-1503"></script>
-  <script src="assets/app.js?v=2026.11.27-1503"></script>
+  <script src="config.js?v=2026.11.27-1508"></script>
+  <script src="assets/app.js?v=2026.11.27-1508"></script>
 </body>
 </html>

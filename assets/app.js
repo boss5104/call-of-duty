@@ -2,8 +2,8 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.11.27-1503'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
-  const APP_CHANGES = 'บังคับเปิดรับแจ้งเตือนตอนปิดแอปก่อนเข้าเวร · บังคับรีเฟรชทุกเครื่องเมื่อมีเวอร์ชันใหม่';
+  const APP_VERSION = '2026.11.27-1508'; // ต้องตรงกับ version.json — อัปเดตด้วย tools/bump-version.sh
+  const APP_CHANGES = 'ลงทะเบียนใหม่ต้องอนุญาตการแจ้งเตือน (รับได้แม้ปิดแอป) · ผู้บังคับบัญชาลบรายชื่อเพื่อให้ลงทะเบียนใหม่ได้';
   const CFG = Object.assign({ API_URL: '', TEAMS: [], STAFF_POLL_MS: 4000, COMMANDER_POLL_MS: 3000 }, window.DUTY_CONFIG || {});
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -111,6 +111,11 @@
           const c = { callId: 'C' + now.toString(36).toUpperCase(), createdAt: now, message: p.message, detail: p.detail || '', priority: p.priority || 'normal', target: p.target || 'ALL', status: 'active', closedAt: 0 };
           d.calls.push(c); save();
           return { ok: true, callId: c.callId };
+        }
+        case 'removeStaff': {
+          cmd();
+          d.staff = d.staff.filter(x => x.staffId !== p.staffId); save();
+          return { ok: true };
         }
         case 'closeCall': {
           cmd();
@@ -488,18 +493,40 @@
       if (!force && this.state === 'on' && Date.now() - this.last < 10 * 60000) return; // ยืนยันซ้ำทุก 10 นาที
       this.busy = true;
       try {
-        const reg = await navigator.serviceWorker.ready;
-        const { key } = await API.call('pushKey');
-        let sub = await reg.pushManager.getSubscription();
-        if (sub && store.get('dc_push_key') !== key) { try { await sub.unsubscribe(); } catch (_) {} sub = null; }
-        if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(key) });
-        store.set('dc_push_key', key);
-        saveSwCfg({ key });
+        const sub = await this.subscribe();
         await API.call('pushSub', { staffId: p.staffId, sub: sub.toJSON(), device: deviceName() });
         this.state = 'on'; this.last = Date.now();
       } catch (e) {
         this.state = 'error'; this.err = e.message;
       } finally { this.busy = false; Staff.renderChecks(); Staff.enforce(); }
+    },
+    /** สมัครรับ push บนเครื่องนี้ (ต้องได้รับอนุญาตการแจ้งเตือนแล้ว) */
+    async subscribe() {
+      const reg = await navigator.serviceWorker.ready;
+      const { key } = await API.call('pushKey');
+      let sub = await reg.pushManager.getSubscription();
+      if (sub && store.get('dc_push_key') !== key) { try { await sub.unsubscribe(); } catch (_) {} sub = null; }
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(key) });
+      store.set('dc_push_key', key);
+      saveSwCfg({ key });
+      return sub;
+    },
+    /** ขั้นตอนบังคับตอนลงทะเบียน: ขออนุญาต + สมัคร push → คืน subscription หรือ throw พร้อมวิธีแก้ */
+    async requireForRegistration() {
+      if (!LIVE) return null;
+      if (!this.supported) {
+        throw new Error(IOS
+          ? 'iPhone/iPad ต้องเพิ่มแอปลงหน้าจอโฮมก่อน (Safari → ปุ่มแชร์ □↑ → เพิ่มไปยังหน้าจอโฮม) แล้วเปิดจากไอคอนเพื่อลงทะเบียน'
+          : 'เบราว์เซอร์นี้รับแจ้งเตือนไม่ได้ กรุณาเปิดลิงก์ด้วย Chrome (Android) หรือ Safari (iPhone)');
+      }
+      await Notify.request();
+      if (!Notify.granted) {
+        throw new Error(Notification.permission === 'denied'
+          ? 'การแจ้งเตือนถูกปิดกั้นไว้ — แตะไอคอน 🔒/ⓘ ข้างลิงก์ (หรือ ข้อมูลแอป) → การแจ้งเตือน → อนุญาต แล้วกดลงทะเบียนอีกครั้ง'
+          : 'ต้องกด “อนุญาต” การแจ้งเตือนก่อน จึงจะลงทะเบียนได้ — กดลงทะเบียนอีกครั้งแล้วเลือก “อนุญาต”');
+      }
+      try { return await this.subscribe(); }
+      catch (e) { throw new Error('เปิดรับแจ้งเตือนไม่สำเร็จ: ' + e.message + ' — ลองใหม่อีกครั้ง'); }
     },
     async test() {
       const p = Staff.profile();
@@ -829,7 +856,10 @@
             <div class="person-meta">${esc(s.team)} · LINE: ${esc(s.lineId)}</div>
             ${pushTag(s, true)}
           </div>
-          <span class="presence ${s.online ? 'on' : ''}" title="${esc(ago(s.lastSeen))}">${s.online ? 'ออนไลน์' : esc(ago(s.lastSeen))}</span>
+          <div class="person-actions">
+            <span class="presence ${s.online ? 'on' : ''}" title="${esc(ago(s.lastSeen))}">${s.online ? 'ออนไลน์' : esc(ago(s.lastSeen))}</span>
+            <button class="btn-ghost sm" type="button" data-remove-staff="${esc(s.staffId)}" data-name="${esc(s.nickname)}">ลบ / ให้ลงทะเบียนใหม่</button>
+          </div>
         </div>`).join('') : `<div class="empty">${q ? 'ไม่พบรายชื่อที่ค้นหา' : 'ยังไม่มีผู้ลงทะเบียน'}</div>`);
 
       // History
@@ -865,6 +895,12 @@
         await this.poll();
       } catch (e) { toast('err', 'ส่งสัญญาณไม่สำเร็จ', e.message); }
       finally { btn.disabled = false; }
+    },
+
+    async removeStaff(staffId, name) {
+      if (!await confirmBox('ลบ ' + name + ' ออกจากทะเบียน?', 'เมื่อเปิดแอปครั้งถัดไป เครื่องนั้นต้องลงทะเบียนใหม่ และต้องกดอนุญาตการแจ้งเตือนจึงจะลงทะเบียนได้', 'ลบรายชื่อ')) return;
+      try { await API.call('removeStaff', Object.assign(this.creds(), { staffId })); toast('info', 'ลบรายชื่อแล้ว', name + ' ต้องลงทะเบียนใหม่เมื่อเปิดแอป'); this.poll(); }
+      catch (e) { toast('err', 'ไม่สำเร็จ', e.message); }
     },
 
     async close(callId) {
@@ -911,6 +947,9 @@
         const b = e.target.closest('[data-close-call]'); if (b) this.close(b.dataset.closeCall);
       });
       $('#rosterSearch').addEventListener('input', e => { this.search = e.target.value; this.render(); });
+      $('#roster').addEventListener('click', e => {
+        const b = e.target.closest('[data-remove-staff]'); if (b) this.removeStaff(b.dataset.removeStaff, b.dataset.name);
+      });
     }
   };
 
@@ -1133,7 +1172,12 @@
         err.hidden = true; btn.disabled = true;
         const prev = this.profile();
         try {
-          const r = await API.call('register', Object.assign({ staffId: prev && prev.staffId }, data));
+          // บังคับ: ต้องอนุญาตการแจ้งเตือน (รับได้แม้ปิดแอป) ก่อนลงทะเบียน
+          let sub = null;
+          if (!prev || !prev.staffId) sub = await Push.requireForRegistration();
+          else if (Notify.granted && Push.supported) { try { sub = await Push.subscribe(); } catch (_) {} }
+          const r = await API.call('register', Object.assign({ staffId: prev && prev.staffId, sub: sub && sub.toJSON(), device: deviceName() }, data));
+          if (sub) { Push.state = 'on'; Push.last = Date.now(); }
           store.set('dc_staff', Object.assign({ staffId: r.staffId }, data));
           toast('ok', prev ? 'บันทึกข้อมูลแล้ว' : 'ลงทะเบียนสำเร็จ', `${data.nickname} · ${data.team}`);
           this.showDuty();
