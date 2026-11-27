@@ -20,6 +20,7 @@ const PUSH_SUBJECT     = 'https://boss5104.github.io/call-of-duty/'; // ลิ�
 const REPUSH_EVERY_SEC = 20;  // ส่งแจ้งเตือนซ้ำทุก ๆ กี่วินาที จนกว่าจะกดตอบรับ
 const REMIND_FOR_MIN   = 30;  // ส่งซ้ำนานสุดกี่นาทีต่อการเรียกหนึ่งครั้ง
 const PUSH_TTL_SEC     = 1800; // ถ้าเครื่องไม่มีเน็ต บริการ push จะเก็บไว้ส่งให้เมื่อกลับมาออนไลน์ภายในกี่วินาที
+const REQUIRE_PUSH     = true; // ผู้ลงทะเบียนใหม่ต้องเปิดรับแจ้งเตือน (ปิดแอปก็ได้รับ) จึงจะลงทะเบียนได้
 
 // คอลัมน์ที่เป็นข้อความ (กันเลข 0 นำหน้าในไอดีไลน์/ชื่อหาย) — นับจาก 1
 const TEXT_COLS = { Staff: [1, 3, 4, 5, 6, 7], Calls: [1, 3, 4, 5, 6, 7], Responses: [1, 2, 3, 4, 5, 6], Push: [1, 2, 4, 5, 6] };
@@ -65,7 +66,10 @@ const ROUTES = {
       team: clean_(p.team), lineId: clean_(p.lineId)
     };
     Object.keys(f).forEach(k => { if (!f[k]) throw new Error('กรุณากรอกข้อมูลให้ครบทุกช่อง'); });
-    return withLock_(() => {
+    const known = clean_(p.staffId) && table_(SHEET.STAFF).some(r => r.StaffID === clean_(p.staffId));
+    const sub = validSub_(p.sub);
+    if (REQUIRE_PUSH && !known && !sub) throw new Error('ต้องกดอนุญาตการแจ้งเตือนก่อน จึงจะลงทะเบียนได้');
+    const out = withLock_(() => {
       const sh = sheet_(SHEET.STAFF);
       const rows = table_(SHEET.STAFF);
       let id = clean_(p.staffId);
@@ -80,6 +84,25 @@ const ROUTES = {
       bust_(SHEET.STAFF);
       return { staffId: id };
     });
+    if (sub) savePushSub_(out.staffId, sub, p.device);
+    out.push = !!sub;
+    return out;
+  },
+
+  // ผู้บังคับบัญชาลบรายชื่อ → เครื่องนั้นต้องลงทะเบียนใหม่ (ซึ่งบังคับเปิดรับแจ้งเตือน)
+  removeStaff: (p) => {
+    requireCommander_(p);
+    const id = clean_(p.staffId);
+    withLock_(() => {
+      const rows = table_(SHEET.STAFF);
+      const i = rows.findIndex(r => r.StaffID === id);
+      if (i < 0) throw new Error('ไม่พบรายชื่อ');
+      sheet_(SHEET.STAFF).deleteRow(i + 2);
+      bust_(SHEET.STAFF);
+    });
+    const eps = table_(SHEET.PUSH).filter(r => r.StaffID === id).map(r => r.Endpoint);
+    if (eps.length) removeSubs_(eps);
+    return {};
   },
 
   staffPoll: (p) => {
@@ -212,11 +235,18 @@ function setup() {
   console.log('พร้อมใช้งาน · push public key: ' + vapid_().pub);
 }
 
+/** ตรวจข้อมูล push subscription → คืน object หรือ null */
+function validSub_(sub) {
+  if (typeof sub === 'string') { try { sub = JSON.parse(sub); } catch (_) { return null; } }
+  const ep = String((sub && sub.endpoint) || '').trim();
+  return /^https:\/\/[^\s]+$/.test(ep) && ep.length <= 1000 ? sub : null;
+}
+
 /** บันทึก/อัปเดตเครื่องที่รับ push (หนึ่งคนมีได้หลายเครื่อง) */
 function savePushSub_(id, sub, device) {
-  if (typeof sub === 'string') { try { sub = JSON.parse(sub); } catch (_) { sub = null; } }
-  const ep = String((sub && sub.endpoint) || '').trim();
-  if (!/^https:\/\/[^\s]+$/.test(ep) || ep.length > 1000) throw new Error('ข้อมูลการแจ้งเตือนไม่ถูกต้อง');
+  sub = validSub_(sub);
+  if (!sub) throw new Error('ข้อมูลการแจ้งเตือนไม่ถูกต้อง');
+  const ep = String(sub.endpoint).trim();
   if (!table_(SHEET.STAFF).some(r => r.StaffID === id)) throw new Error('ไม่พบข้อมูลผู้ลงทะเบียน');
   return withLock_(() => {
     const sh = sheet_(SHEET.PUSH);
