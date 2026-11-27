@@ -202,6 +202,12 @@ em.muted { font-style: normal; font-size: 12px; }
 .seg { display: flex; flex-wrap: wrap; gap: 8px; }
 .seg button { padding: 8px 14px; border-radius: 99px; border: 1px solid var(--line-soft); font-size: 13.5px; color: #c6cce0; background: var(--surface-2); }
 .tone-seg button { font-size: 13px; padding: 7px 12px; }
+.team-pick { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.team-pick button { padding: 14px 6px; border-radius: 14px; border: 1px solid var(--line-soft); background: var(--surface-2); color: #c6cce0; font-size: 15px; font-weight: 600; }
+.team-pick button.sel { border-color: var(--gold); color: #1a1405; background: var(--gold-grad); box-shadow: 0 8px 20px -8px rgba(201,165,76,.6); }
+.team-pick.invalid button { border-color: rgba(255,90,95,.7); }
+.push-diag { margin: -6px 0 12px; padding: 8px 12px; border-radius: 10px; font-size: 12.5px; line-height: 1.55; background: var(--surface-2); border: 1px solid var(--line-soft); color: var(--muted); word-break: break-word; }
+.push-diag.bad { border-color: rgba(255,90,95,.45); color: #ff9a9d; background: rgba(255,90,95,.06); }
 .seg button.sel { border-color: var(--gold); color: #1a1405; background: var(--gold-grad); font-weight: 600; }
 
 .btn-call {
